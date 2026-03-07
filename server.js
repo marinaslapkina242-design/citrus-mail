@@ -1,7 +1,8 @@
 const http = require('http');
-const mailbox = {}; // { userId: [letters] }
-const players = {}; // { userId: {id,name,tag,color,ts} }
-const online  = {}; // { userId: {id,name,tag,color,status,world,ts} }
+const mailbox = {};
+const players = {};
+const online  = {};
+const positions = {}; // { userId: {id,name,color,x,y,z,ry,map,ts} }
 
 const H = {
   'Access-Control-Allow-Origin': '*',
@@ -9,7 +10,6 @@ const H = {
   'Access-Control-Allow-Headers': 'Content-Type',
   'Content-Type': 'application/json'
 };
-
 const reply = (res, code, data) => { res.writeHead(code, H); res.end(JSON.stringify(data)); };
 const body  = req => new Promise(ok => {
   let s=''; req.on('data',c=>s+=c); req.on('end',()=>{ try{ok(JSON.parse(s))}catch{ok({})} });
@@ -20,7 +20,6 @@ http.createServer(async (req, res) => {
   const url = new URL('http://x'+req.url);
   const parts = url.pathname.split('/').filter(Boolean);
 
-  // GET /ping
   if (req.method==='GET' && parts[0]==='ping')
     return reply(res, 200, {ok:true});
 
@@ -40,19 +39,36 @@ http.createServer(async (req, res) => {
     return reply(res, 200, found);
   }
 
-  // POST /online/:id  — обновить статус онлайн
+  // POST /online/:id
   if (req.method==='POST' && parts[0]==='online' && parts[1]) {
     const p = await body(req);
     online[parts[1]] = {...p, id:parts[1], ts: Date.now()};
-    // Заодно обновляем в players
     if (!players[parts[1]]) players[parts[1]] = {...p, id:parts[1]};
     return reply(res, 200, {ok:true});
   }
 
-  // GET /online  — список всех онлайн (активных за последние 2 мин)
+  // GET /online
   if (req.method==='GET' && parts[0]==='online' && !parts[1]) {
     const now = Date.now();
     const list = Object.values(online).filter(p => now - (p.ts||0) < 2*60*1000);
+    return reply(res, 200, list);
+  }
+
+  // POST /pos/:id — сохранить позицию игрока
+  if (req.method==='POST' && parts[0]==='pos' && parts[1]) {
+    const p = await body(req);
+    positions[parts[1]] = {...p, id:parts[1], ts: Date.now()};
+    return reply(res, 200, {ok:true});
+  }
+
+  // GET /pos?map=X — получить всех игроков в этой карте
+  if (req.method==='GET' && parts[0]==='pos') {
+    const map = url.searchParams.get('map');
+    const now = Date.now();
+    const list = Object.values(positions).filter(p =>
+      now - (p.ts||0) < 10000 && // активны последние 10 сек
+      (!map || String(p.map) === String(map))
+    );
     return reply(res, 200, list);
   }
 
@@ -81,4 +97,4 @@ http.createServer(async (req, res) => {
 
   reply(res, 404, {error:'not found'});
 
-}).listen(process.env.PORT||3000, ()=>console.log('Citrus backend OK port', process.env.PORT||3000));
+}).listen(process.env.PORT||3000, ()=>console.log('Citrus backend OK'));
