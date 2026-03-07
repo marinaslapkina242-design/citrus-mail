@@ -1,6 +1,7 @@
 const http = require('http');
 const mailbox = {}; // { userId: [letters] }
 const players = {}; // { userId: {id,name,tag,color,ts} }
+const online  = {}; // { userId: {id,name,tag,color,status,world,ts} }
 
 const H = {
   'Access-Control-Allow-Origin': '*',
@@ -16,29 +17,46 @@ const body  = req => new Promise(ok => {
 
 http.createServer(async (req, res) => {
   if (req.method==='OPTIONS') { res.writeHead(204,H); return res.end(); }
-  const parts = req.url.split('/').filter(Boolean);
+  const url = new URL('http://x'+req.url);
+  const parts = url.pathname.split('/').filter(Boolean);
 
-  // GET  /ping
+  // GET /ping
   if (req.method==='GET' && parts[0]==='ping')
     return reply(res, 200, {ok:true});
 
-  // POST /players/:id  — регистрация игрока
+  // POST /players/:id
   if (req.method==='POST' && parts[0]==='players' && parts[1]) {
     const p = await body(req);
-    players[parts[1]] = {...p, ts: Date.now()};
+    players[parts[1]] = {...p, id:parts[1], ts: Date.now()};
     return reply(res, 200, {ok:true});
   }
 
-  // GET  /players/search?q=...  — поиск игроков
+  // GET /players/search?q=
   if (req.method==='GET' && parts[0]==='players' && parts[1]==='search') {
-    const q = new URL('http://x'+req.url).searchParams.get('q')||'';
+    const q = (url.searchParams.get('q')||'').toLowerCase();
     const found = Object.values(players).filter(p =>
-      p.name && p.name.toLowerCase().includes(q.toLowerCase())
+      p.name && (p.name.toLowerCase().includes(q) || String(p.id).includes(q))
     );
     return reply(res, 200, found);
   }
 
-  // POST /mail/:toId  — отправить письмо
+  // POST /online/:id  — обновить статус онлайн
+  if (req.method==='POST' && parts[0]==='online' && parts[1]) {
+    const p = await body(req);
+    online[parts[1]] = {...p, id:parts[1], ts: Date.now()};
+    // Заодно обновляем в players
+    if (!players[parts[1]]) players[parts[1]] = {...p, id:parts[1]};
+    return reply(res, 200, {ok:true});
+  }
+
+  // GET /online  — список всех онлайн (активных за последние 2 мин)
+  if (req.method==='GET' && parts[0]==='online' && !parts[1]) {
+    const now = Date.now();
+    const list = Object.values(online).filter(p => now - (p.ts||0) < 2*60*1000);
+    return reply(res, 200, list);
+  }
+
+  // POST /mail/:toId
   if (req.method==='POST' && parts[0]==='mail' && parts[1]) {
     const toId = parts[1];
     const letter = await body(req);
@@ -51,11 +69,11 @@ http.createServer(async (req, res) => {
     return reply(res, 200, {ok:true});
   }
 
-  // GET  /mail/:userId  — получить письма
+  // GET /mail/:userId
   if (req.method==='GET' && parts[0]==='mail' && parts[1])
     return reply(res, 200, mailbox[parts[1]] || []);
 
-  // DELETE /mail/:userId  — очистить после прочтения
+  // DELETE /mail/:userId
   if (req.method==='DELETE' && parts[0]==='mail' && parts[1]) {
     mailbox[parts[1]] = [];
     return reply(res, 200, {ok:true});
@@ -63,4 +81,4 @@ http.createServer(async (req, res) => {
 
   reply(res, 404, {error:'not found'});
 
-}).listen(process.env.PORT||3000, ()=>console.log('Citrus backend OK'));
+}).listen(process.env.PORT||3000, ()=>console.log('Citrus backend OK port', process.env.PORT||3000));
