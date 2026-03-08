@@ -1,5 +1,13 @@
 const http = require('http');
-const mailbox = {}, players = {}, online = {}, positions = {};
+const fs = require('fs');
+
+// Persistent storage for players
+const DB_FILE = '/tmp/citrus_players.json';
+let players = {};
+try { players = JSON.parse(fs.readFileSync(DB_FILE,'utf8')); } catch(e) { players = {}; }
+const savePlayers = () => { try { fs.writeFileSync(DB_FILE, JSON.stringify(players)); } catch(e){} };
+
+const mailbox = {}, online = {}, positions = {};
 const publishedGames = {}; // { gameId: {id, name, author, authorId, desc, data, ts} }
 
 const H = {
@@ -20,7 +28,7 @@ const server = http.createServer(async(req,res)=>{
 
   // Players
   if(req.method==='POST'&&parts[0]==='players'&&parts[1]){
-    const p=await body(req); players[parts[1]]={...p,id:parts[1],ts:Date.now()}; return reply(res,200,{ok:true});
+    const p=await body(req); players[parts[1]]={...p,id:parts[1],ts:Date.now()}; savePlayers(); return reply(res,200,{ok:true});
   }
   if(req.method==='GET'&&parts[0]==='players'&&parts[1]==='search'){
     const q=(url.searchParams.get('q')||'').toLowerCase();
