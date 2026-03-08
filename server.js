@@ -34,6 +34,10 @@ const server = http.createServer(async(req,res)=>{
     const q=(url.searchParams.get('q')||'').toLowerCase();
     return reply(res,200,Object.values(players).filter(p=>p.name&&(p.name.toLowerCase().includes(q)||String(p.id).includes(q))));
   }
+  if(req.method==='GET'&&parts[0]==='players'&&parts[1]&&parts[1]!=='search'){
+    const p=players[parts[1]];
+    return p ? reply(res,200,p) : reply(res,404,{error:'not found'});
+  }
 
   // Online
   if(req.method==='POST'&&parts[0]==='online'&&parts[1]){
