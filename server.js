@@ -158,13 +158,16 @@ const server = http.createServer(async(req,res)=>{
     if(!borrow) return reply(res,404,{ok:false,error:'Нет долга'});
     const repayAmount = borrow.amount;
     const lenderId = borrow.lenderId;
+    // Save borrower's new balance
+    if(d.balance !== undefined && players[d.borrowerId]){
+        players[d.borrowerId].balance = d.balance;
+    }
     delete creditsDB.borrows[d.borrowerId];
     if(creditsDB.credits[borrow.creditId]) delete creditsDB.credits[borrow.creditId];
-    // Give money back to lender in their player record
-    if(players[lenderId]){
-        players[lenderId].balance = (players[lenderId].balance||0) + repayAmount;
-        savePlayers();
-    }
+    // Give money to lender
+    if(!players[lenderId]) players[lenderId] = {id:lenderId, balance:0};
+    players[lenderId].balance = (players[lenderId].balance||0) + repayAmount;
+    savePlayers();
     saveCredits();
     return reply(res,200,{ok:true,amount:repayAmount,lenderId});
   }
