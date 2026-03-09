@@ -8,6 +8,16 @@ try { players = JSON.parse(fs.readFileSync(DB_FILE,'utf8')); } catch(e) { player
 const savePlayers = () => { try { fs.writeFileSync(DB_FILE, JSON.stringify(players)); } catch(e){} };
 
 const mailbox = {}, online = {}, positions = {};
+
+// Roulette leaderboard
+let rouletteBoard = {};
+try { rouletteBoard = JSON.parse(fs.readFileSync('/tmp/citrus_roulette.json','utf8')); } catch(e){}
+const saveRoulette = () => { try{ fs.writeFileSync('/tmp/citrus_roulette.json',JSON.stringify(rouletteBoard)); }catch(e){} };
+
+// Credits
+let creditsDB = {credits:{},borrows:{}};
+try { creditsDB = JSON.parse(fs.readFileSync('/tmp/citrus_credits.json','utf8')); } catch(e){}
+const saveCredits = () => { try{ fs.writeFileSync('/tmp/citrus_credits.json',JSON.stringify(creditsDB)); }catch(e){} };
 const publishedGames = {}; // { gameId: {id, name, author, authorId, desc, data, ts} }
 
 const H = {
@@ -92,6 +102,72 @@ const server = http.createServer(async(req,res)=>{
     if(String(g.authorId)!==String(url.searchParams.get('authorId')))
       return reply(res,403,{error:'forbidden'});
     delete publishedGames[parts[1]];
+    return reply(res,200,{ok:true});
+  }
+
+
+  // ── Roulette leaderboard ──
+  if(req.method==='GET'&&parts[0]==='roulette-leaderboard'){
+    return reply(res,200,Object.values(rouletteBoard).sort((a,b)=>b.total-a.total));
+  }
+  if(req.method==='POST'&&parts[0]==='roulette-leaderboard'){
+    const d=await body(req);
+    if(!d.id||!d.prize) return reply(res,400,{ok:false});
+    if(!rouletteBoard[d.id]) rouletteBoard[d.id]={id:d.id,name:d.name,total:0};
+    rouletteBoard[d.id].total+=Number(d.prize);
+    rouletteBoard[d.id].name=d.name;
+    saveRoulette();
+    return reply(res,200,{ok:true,total:rouletteBoard[d.id].total});
+  }
+
+  // ── Credits ──
+  if(req.method==='GET'&&parts[0]==='credits'){
+    const now=Date.now();
+    Object.values(creditsDB.borrows||{}).forEach(b=>{ if(!b.penaltyApplied&&now>b.dueAt){b.penaltyApplied=true;saveCredits();} });
+    return reply(res,200,{credits:Object.values(creditsDB.credits||{}),borrows:Object.values(creditsDB.borrows||{})});
+  }
+  if(req.method==='POST'&&parts[0]==='credits'&&!parts[1]){
+    const d=await body(req);
+    if(!d.lenderId||!d.amount||!d.days) return reply(res,400,{ok:false,error:'Недостаточно данных'});
+    if(d.amount<1000||d.amount>100000) return reply(res,400,{ok:false,error:'Сумма 1000–100000'});
+    if(d.days<10||d.days>60) return reply(res,400,{ok:false,error:'Срок 10–60 минут'});
+    const existing=Object.values(creditsDB.credits).find(c=>String(c.lenderId)===String(d.lenderId));
+    if(existing) return reply(res,400,{ok:false,error:'У тебя уже есть активный кредит'});
+    const id='c_'+d.lenderId+'_'+Date.now();
+    creditsDB.credits[id]={id,lenderId:d.lenderId,lenderName:d.lenderName,amount:d.amount,days:d.days,borrowerId:null,borrowerName:null,createdAt:Date.now()};
+    saveCredits();
+    return reply(res,200,{ok:true});
+  }
+  if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='borrow'){
+    const d=await body(req);
+    const credit=creditsDB.credits[d.creditId];
+    if(!credit) return reply(res,404,{ok:false,error:'Кредит не найден'});
+    if(credit.borrowerId) return reply(res,400,{ok:false,error:'Уже взят'});
+    if(String(credit.lenderId)===String(d.borrowerId)) return reply(res,400,{ok:false,error:'Нельзя брать свой кредит'});
+    const existingDebt=Object.values(creditsDB.borrows).find(b=>String(b.borrowerId)===String(d.borrowerId));
+    if(existingDebt) return reply(res,400,{ok:false,error:'У тебя уже есть долг'});
+    credit.borrowerId=d.borrowerId; credit.borrowerName=d.borrowerName;
+    const dueAt=Date.now()+credit.days*60000;
+    creditsDB.borrows[d.borrowerId]={borrowerId:d.borrowerId,borrowerName:d.borrowerName,lenderId:credit.lenderId,lenderName:credit.lenderName,amount:credit.amount,days:credit.days,dueAt,creditId:d.creditId,penaltyApplied:false};
+    saveCredits();
+    return reply(res,200,{ok:true,amount:credit.amount,days:credit.days});
+  }
+  if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='repay'){
+    const d=await body(req);
+    const borrow=creditsDB.borrows[d.borrowerId];
+    if(!borrow) return reply(res,404,{ok:false,error:'Нет долга'});
+    delete creditsDB.borrows[d.borrowerId];
+    if(creditsDB.credits[borrow.creditId]) delete creditsDB.credits[borrow.creditId];
+    saveCredits();
+    return reply(res,200,{ok:true,amount:borrow.amount,lenderId:borrow.lenderId});
+  }
+  if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='cancel'){
+    const d=await body(req);
+    const credit=creditsDB.credits[d.creditId];
+    if(!credit||String(credit.lenderId)!==String(d.lenderId)) return reply(res,404,{ok:false});
+    if(credit.borrowerId) return reply(res,400,{ok:false,error:'Уже взят, нельзя отозвать'});
+    delete creditsDB.credits[d.creditId];
+    saveCredits();
     return reply(res,200,{ok:true});
   }
 
