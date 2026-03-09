@@ -156,19 +156,27 @@ const server = http.createServer(async(req,res)=>{
     const d=await body(req);
     const borrow=creditsDB.borrows[d.borrowerId];
     if(!borrow) return reply(res,404,{ok:false,error:'Нет долга'});
+    const repayAmount = borrow.amount;
+    const lenderId = borrow.lenderId;
     delete creditsDB.borrows[d.borrowerId];
     if(creditsDB.credits[borrow.creditId]) delete creditsDB.credits[borrow.creditId];
+    // Give money back to lender in their player record
+    if(players[lenderId]){
+        players[lenderId].balance = (players[lenderId].balance||0) + repayAmount;
+        savePlayers();
+    }
     saveCredits();
-    return reply(res,200,{ok:true,amount:borrow.amount,lenderId:borrow.lenderId});
+    return reply(res,200,{ok:true,amount:repayAmount,lenderId});
   }
   if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='cancel'){
     const d=await body(req);
     const credit=creditsDB.credits[d.creditId];
     if(!credit||String(credit.lenderId)!==String(d.lenderId)) return reply(res,404,{ok:false});
     if(credit.borrowerId) return reply(res,400,{ok:false,error:'Уже взят, нельзя отозвать'});
+    const amt = credit.amount;
     delete creditsDB.credits[d.creditId];
     saveCredits();
-    return reply(res,200,{ok:true});
+    return reply(res,200,{ok:true, amount:amt});
   }
 
   reply(res,404,{error:'not found'});
