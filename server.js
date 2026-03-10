@@ -146,13 +146,11 @@ const server=http.createServer(async(req,res)=>{
         const existing=Object.values(DB.credits.credits||{}).find(c=>String(c.lenderId)===String(d.lenderId));
         if(existing)return reply(res,400,{ok:false,error:'У тебя уже есть активный кредит'});
         const id='c_'+d.lenderId+'_'+Date.now();
-        // Снимаем баланс у кредитора на сервере
+        // Создаём кредит — баланс снимает клиент и присылает нам
         if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
-        const lenderBal = DB.players[d.lenderId].balance||0;
-        if(lenderBal < d.amount) return reply(res,400,{ok:false,error:'Недостаточно средств на сервере'});
-        DB.players[d.lenderId].balance = lenderBal - d.amount;
+        if(d.newBalance !== undefined) DB.players[d.lenderId].balance = d.newBalance;
         DB.credits.credits[id]={id,lenderId:d.lenderId,lenderName:d.lenderName,amount:d.amount,days:d.days,borrowerId:null,borrowerName:null,createdAt:Date.now()};
-        saveDB(); return reply(res,200,{ok:true, balance: DB.players[d.lenderId].balance});
+        saveDB(); return reply(res,200,{ok:true});
     }
     if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='borrow'){
         const d=await body(req);
