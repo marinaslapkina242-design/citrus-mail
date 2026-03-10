@@ -229,9 +229,9 @@ const server=http.createServer(async(req,res)=>{
         const key=d.name.toLowerCase();
         DB.bans[key]={name:d.name,reason:d.reason||'Нарушение правил',date:new Date().toLocaleDateString('ru'),by:d.by||'Разраб'};
         saveDB();
-        // Кикнуть забаненного через WS
+        // Кикнуть забаненного через WS (ищем по имени)
         wsClients.forEach(cl=>{
-            if(cl.userId&&cl.userId.toLowerCase&&cl.userId.toLowerCase()===key)
+            if(cl.name===key)
                 wsWrite(cl.socket,{type:'banned',reason:d.reason||'Нарушение правил',by:d.by||'Разраб'});
         });
         return reply(res,200,{ok:true});
@@ -300,7 +300,7 @@ server.on('upgrade',(req,socket)=>{
             const msg=wsRead(frame);
             if(!msg)continue;
             if(msg.type==='join'){
-                client.userId=msg.id;client.map=msg.map;
+                client.userId=msg.id;client.map=msg.map;client.name=(msg.name||'').toLowerCase();
                 // Отправить кэшированные позиции без ограничения по времени
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
