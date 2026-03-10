@@ -8,11 +8,11 @@ const JSONBIN_BIN = process.env.JSONBIN_BIN || '';
 let DB = {
     players:{}, roulette:{},
     credits:{ credits:{}, borrows:{} },
-    games:{}, studioSync:{}
+    games:{}, studioSync:{}, bans:{}
 };
 
 function loadLocalDB(){
-    try{ const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8')); if(d&&typeof d==='object'){DB={...DB,...d};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};} console.log('✓ local DB loaded'); }catch(e){}
+    try{ const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8')); if(d&&typeof d==='object'){DB={...DB,...d};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};} console.log('✓ local DB loaded'); }catch(e){}
 }
 
 function loadDB(){
@@ -21,7 +21,7 @@ function loadDB(){
         const req=https.request({hostname:'api.jsonbin.io',path:`/v3/b/${JSONBIN_BIN}/latest`,method:'GET',headers:{'X-Master-Key':JSONBIN_KEY}},res=>{
             let s=''; res.on('data',c=>s+=c);
             res.on('end',()=>{
-                try{ const d=JSON.parse(s); if(d.record&&typeof d.record==='object'){DB={...DB,...d.record};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};console.log('✓ JSONBin DB loaded');} }catch(e){loadLocalDB();}
+                try{ const d=JSON.parse(s); if(d.record&&typeof d.record==='object'){DB={...DB,...d.record};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};console.log('✓ JSONBin DB loaded');} }catch(e){loadLocalDB();}
                 resolve();
             });
         });
@@ -218,6 +218,35 @@ const server=http.createServer(async(req,res)=>{
         return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
     }
 
+    // Bans
+    if(req.method==='GET'&&parts[0]==='bans'){
+        return reply(res,200,Object.values(DB.bans||{}));
+    }
+    if(req.method==='POST'&&parts[0]==='bans'){
+        const d=await body(req);
+        if(!d.name||!d.adminKey)return reply(res,403,{ok:false,error:'forbidden'});
+        if(d.adminKey!=='citrus_admin_2025')return reply(res,403,{ok:false,error:'forbidden'});
+        const key=d.name.toLowerCase();
+        DB.bans[key]={name:d.name,reason:d.reason||'Нарушение правил',date:new Date().toLocaleDateString('ru'),by:d.by||'Разраб'};
+        saveDB();
+        // Кикнуть забаненного через WS
+        wsClients.forEach(cl=>{
+            if(cl.userId&&cl.userId.toLowerCase&&cl.userId.toLowerCase()===key)
+                wsWrite(cl.socket,{type:'banned',reason:d.reason||'Нарушение правил',by:d.by||'Разраб'});
+        });
+        return reply(res,200,{ok:true});
+    }
+    if(req.method==='DELETE'&&parts[0]==='bans'&&parts[1]){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025')return reply(res,403,{ok:false,error:'forbidden'});
+        delete DB.bans[parts[1].toLowerCase()]; saveDB(); return reply(res,200,{ok:true});
+    }
+    if(req.method==='GET'&&parts[0]==='checkban'&&parts[1]){
+        const key=decodeURIComponent(parts[1]).toLowerCase();
+        const ban=DB.bans[key];
+        return ban?reply(res,200,{banned:true,...ban}):reply(res,200,{banned:false});
+    }
+
     reply(res,404,{error:'not found'});
 });
 
@@ -272,12 +301,12 @@ server.on('upgrade',(req,socket)=>{
             if(!msg)continue;
             if(msg.type==='join'){
                 client.userId=msg.id;client.map=msg.map;
-                // 1. Отправить кэшированные позиции без ограничения по времени
+                // Отправить кэшированные позиции без ограничения по времени
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
                         wsWrite(socket,p);
                 });
-                // 2. Попросить всех в мире немедленно переслать позицию новому игроку
+                // Попросить всех в мире немедленно переслать позицию
                 wsClients.forEach(c2=>{
                     if(c2.map&&String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
                         wsWrite(c2.socket,{type:'req_pos',for:msg.id});
