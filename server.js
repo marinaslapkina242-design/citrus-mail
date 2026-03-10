@@ -146,8 +146,13 @@ const server=http.createServer(async(req,res)=>{
         const existing=Object.values(DB.credits.credits||{}).find(c=>String(c.lenderId)===String(d.lenderId));
         if(existing)return reply(res,400,{ok:false,error:'У тебя уже есть активный кредит'});
         const id='c_'+d.lenderId+'_'+Date.now();
+        // Снимаем баланс у кредитора на сервере
+        if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
+        const lenderBal = DB.players[d.lenderId].balance||0;
+        if(lenderBal < d.amount) return reply(res,400,{ok:false,error:'Недостаточно средств на сервере'});
+        DB.players[d.lenderId].balance = lenderBal - d.amount;
         DB.credits.credits[id]={id,lenderId:d.lenderId,lenderName:d.lenderName,amount:d.amount,days:d.days,borrowerId:null,borrowerName:null,createdAt:Date.now()};
-        saveDB(); return reply(res,200,{ok:true});
+        saveDB(); return reply(res,200,{ok:true, balance: DB.players[d.lenderId].balance});
     }
     if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='borrow'){
         const d=await body(req);
@@ -172,15 +177,19 @@ const server=http.createServer(async(req,res)=>{
         DB.players[lenderId].balance=(DB.players[lenderId].balance||0)+repayAmount;
         delete DB.credits.borrows[d.borrowerId];
         if(DB.credits.credits[borrow.creditId])delete DB.credits.credits[borrow.creditId];
-        saveDB(); return reply(res,200,{ok:true,amount:repayAmount,lenderId});
+        saveDB(); return reply(res,200,{ok:true,amount:repayAmount,lenderId,lenderBalance:DB.players[lenderId].balance});
     }
     if(req.method==='POST'&&parts[0]==='credits'&&parts[1]==='cancel'){
         const d=await body(req);
         const credit=DB.credits.credits[d.creditId];
         if(!credit||String(credit.lenderId)!==String(d.lenderId))return reply(res,404,{ok:false});
         if(credit.borrowerId)return reply(res,400,{ok:false,error:'Уже взят, нельзя отозвать'});
-        const amt=credit.amount; delete DB.credits.credits[d.creditId]; saveDB();
-        return reply(res,200,{ok:true,amount:amt});
+        const amt=credit.amount;
+        // Возвращаем деньги кредитору на сервере
+        if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
+        DB.players[d.lenderId].balance=(DB.players[d.lenderId].balance||0)+amt;
+        delete DB.credits.credits[d.creditId]; saveDB();
+        return reply(res,200,{ok:true, amount:amt, balance: DB.players[d.lenderId].balance});
     }
 
     // Совместная студия
