@@ -89,13 +89,27 @@ const server=http.createServer(async(req,res)=>{
 
     // Games
     if(req.method==='GET'&&parts[0]==='games'&&!parts[1]){
+        // Восстанавливаем из профилей если DB.games пустая (после рестарта без JSONBin)
+        if(Object.keys(DB.games).length===0){
+            Object.values(DB.players||{}).forEach(p=>{
+                (p.publishedGames||[]).forEach(g=>{ if(g.id) DB.games[g.id]=g; });
+            });
+        }
         return reply(res,200,Object.values(DB.games).sort((a,b)=>b.ts-a.ts));
     }
     if(req.method==='POST'&&parts[0]==='games'){
         const g=await body(req);
         if(!g.name||!g.authorId)return reply(res,400,{error:'bad'});
         const id='g_'+g.authorId+'_'+Date.now();
-        DB.games[id]={...g,id,ts:Date.now()}; saveDB();
+        DB.games[id]={...g,id,ts:Date.now()};
+        // Backup в профиле автора — не потеряется при рестарте
+        if(!DB.players[g.authorId]) DB.players[g.authorId]={id:g.authorId};
+        if(!DB.players[g.authorId].publishedGames) DB.players[g.authorId].publishedGames=[];
+        // Обновляем или добавляем
+        const existing = DB.players[g.authorId].publishedGames.findIndex(x=>x.localId===g.localId);
+        if(existing>=0) DB.players[g.authorId].publishedGames[existing]={...g,id,ts:Date.now()};
+        else DB.players[g.authorId].publishedGames.push({...g,id,ts:Date.now()});
+        saveDB();
         return reply(res,200,{ok:true,id});
     }
     if(req.method==='DELETE'&&parts[0]==='games'&&parts[1]){
