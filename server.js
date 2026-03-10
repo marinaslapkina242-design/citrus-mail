@@ -65,6 +65,14 @@ const server=http.createServer(async(req,res)=>{
         const p=DB.players[parts[1]]; return p?reply(res,200,p):reply(res,404,{error:'not found'});
     }
 
+    // Positions (HTTP fallback for poll)
+    if(req.method==='GET'&&parts[0]==='pos'){
+        const map=url.searchParams.get('map');
+        const now=Date.now();
+        const list=Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000);
+        return reply(res,200,list);
+    }
+
     // Online
     if(req.method==='POST'&&parts[0]==='online'&&parts[1]){
         const p=await body(req); online[parts[1]]={...p,id:parts[1],ts:Date.now()};
@@ -263,7 +271,16 @@ server.on('upgrade',(req,socket)=>{
             const frame=buf.slice(0,frameLen);buf=buf.slice(frameLen);
             const msg=wsRead(frame);
             if(!msg)continue;
-            if(msg.type==='join'){client.userId=msg.id;client.map=msg.map;}
+            if(msg.type==='join'){
+                client.userId=msg.id;client.map=msg.map;
+                // Сразу отправить новому игроку позиции всех кто уже в этом мире
+                const now2=Date.now();
+                Object.values(positions).forEach(p=>{
+                    if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map)&&now2-(p.ts||0)<30000){
+                        wsWrite(socket,p);
+                    }
+                });
+            }
             if(msg.type==='move'){client.map=msg.map;positions[msg.id]={...msg,ts:Date.now()};broadcastToMap(msg.map,msg,msg.id);}
             if(msg.type==='studio_join'){client.studioSession=msg.sessionId;client.userId=msg.userId;}
             if(msg.type==='studio_block'||msg.type==='studio_clear'){broadcastToSession(msg.sessionId,msg,msg.userId);}
