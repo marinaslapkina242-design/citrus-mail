@@ -272,11 +272,15 @@ server.on('upgrade',(req,socket)=>{
             if(!msg)continue;
             if(msg.type==='join'){
                 client.userId=msg.id;client.map=msg.map;
-                // Отправить новому игроку позиции всех кто уже в этом мире
-                const _now=Date.now();
+                // 1. Отправить новому игроку кэшированные позиции (любой давности)
                 Object.values(positions).forEach(p=>{
-                    if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map)&&_now-(p.ts||0)<30000)
+                    if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
                         wsWrite(socket,p);
+                });
+                // 2. Попросить всех в этом мире немедленно переслать свою позицию новому игроку
+                wsClients.forEach(c2=>{
+                    if(String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
+                        wsWrite(c2.socket,{type:'req_pos',for:msg.id});
                 });
             }
             if(msg.type==='move'){client.map=msg.map;positions[msg.id]={...msg,ts:Date.now()};broadcastToMap(msg.map,msg,msg.id);}
