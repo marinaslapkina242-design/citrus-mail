@@ -272,14 +272,14 @@ server.on('upgrade',(req,socket)=>{
             if(!msg)continue;
             if(msg.type==='join'){
                 client.userId=msg.id;client.map=msg.map;
-                // 1. Отправить новому игроку кэшированные позиции (любой давности)
+                // 1. Отправить кэшированные позиции без ограничения по времени
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
                         wsWrite(socket,p);
                 });
-                // 2. Попросить всех в этом мире немедленно переслать свою позицию новому игроку
+                // 2. Попросить всех в мире немедленно переслать позицию новому игроку
                 wsClients.forEach(c2=>{
-                    if(String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
+                    if(c2.map&&String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
                         wsWrite(c2.socket,{type:'req_pos',for:msg.id});
                 });
             }
