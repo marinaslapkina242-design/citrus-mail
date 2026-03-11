@@ -38,14 +38,39 @@ function loadDB(){
 
 let _st=null;
 function saveDB(){
-    try{ fs.writeFileSync('/tmp/citrus_db.json',JSON.stringify(DB)); }catch(e){}
-    if(!JSONBIN_KEY||!JSONBIN_BIN)return;
-    if(_st)clearTimeout(_st);
+    // Всегда пишем полную копию локально
+    try{ fs.writeFileSync('/tmp/citrus_db.json',JSON.stringify(DB)); }catch(e){ console.error('❌ local save failed:',e.message); }
+    if(!JSONBIN_KEY||!JSONBIN_BIN) return;
+    if(_st) clearTimeout(_st);
     _st=setTimeout(()=>{
-        const payload=JSON.stringify(DB);
-        const req=https.request({hostname:'api.jsonbin.io',path:`/v3/b/${JSONBIN_BIN}`,method:'PUT',headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN_KEY,'Content-Length':Buffer.byteLength(payload)}},res=>{res.on('data',()=>{});res.on('end',()=>console.log('✓ saved to JSONBin'));});
-        req.on('error',()=>{}); req.write(payload); req.end();
-    },2000);
+        // Не сохраняем studioSync — он большой и временный
+        const toSave = {...DB, studioSync:{}};
+        const payload = JSON.stringify(toSave);
+        const kb = (Buffer.byteLength(payload)/1024).toFixed(1);
+        console.log(`💾 saving to JSONBin: ${kb}KB`);
+        if(Buffer.byteLength(payload) > 90*1024){
+            // Слишком большой — чистим старые игроки без имени и большие данные
+            toSave.players = Object.fromEntries(
+                Object.entries(toSave.players).filter(([,p])=>p.name)
+            );
+            console.warn('⚠️ DB too large, trimmed anonymous players');
+        }
+        const trimmed = JSON.stringify(toSave);
+        const req=https.request({
+            hostname:'api.jsonbin.io',
+            path:`/v3/b/${JSONBIN_BIN}`,
+            method:'PUT',
+            headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN_KEY,'Content-Length':Buffer.byteLength(trimmed)}
+        }, res=>{
+            let s=''; res.on('data',c=>s+=c);
+            res.on('end',()=>{
+                if(res.statusCode===200) console.log('✅ JSONBin saved OK');
+                else console.error('❌ JSONBin error:',res.statusCode, s.slice(0,200));
+            });
+        });
+        req.on('error',(e)=>console.error('❌ JSONBin request error:',e.message));
+        req.write(trimmed); req.end();
+    }, 2000);
 }
 
 const mailbox={},online={},positions={};
@@ -58,7 +83,20 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL('http://x'+req.url);
     const parts=url.pathname.split('/').filter(Boolean);
 
-    if(req.method==='GET'&&parts[0]==='ping') return reply(res,200,{ok:true});
+    if(req.method==='GET'&&parts[0]==='ping') return reply(res,200,{ok:true, players:Object.keys(DB.players).length, jsonbin: !!(JSONBIN_KEY&&JSONBIN_BIN) });
+
+    // Бэкап БД (только с adminKey)
+    if(req.method==='GET'&&parts[0]==='backup'){
+        const key=url.searchParams.get('key');
+        if(key!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        return reply(res,200,{
+            players: Object.keys(DB.players).length,
+            stats: DB.stats,
+            bans: Object.keys(DB.bans).length,
+            roulette: Object.keys(DB.roulette).length,
+            db: DB
+        });
+    }
 
     // Players
     if(req.method==='POST'&&parts[0]==='players'&&parts[1]){
@@ -244,6 +282,16 @@ const server=http.createServer(async(req,res)=>{
         const map=url.searchParams.get('map');
         const now=Date.now();
         return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
+    }
+
+    // Leaderboard — топ по балансу (из DB.players, всегда актуально)
+    if(req.method==='GET'&&parts[0]==='leaderboard'){
+        const top = Object.values(DB.players)
+            .filter(p=>p.name&&(p.balance||0)>=0)
+            .sort((a,b)=>(b.balance||0)-(a.balance||0))
+            .slice(0,50)
+            .map(p=>({id:p.id,name:p.name,tag:p.tag||'',color:p.color||'#FF9800',balance:p.balance||0,inventory:p.inventory||[]}));
+        return reply(res,200,top);
     }
 
     // Stats
