@@ -2,8 +2,9 @@ const http = require('http');
 const fs   = require('fs');
 const https = require('https');
 
-const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
-const JSONBIN_BIN = process.env.JSONBIN_BIN || '';
+// Хранилище: GitHub Gist (проще jsonbin — токен получить в 2 клика)
+const GIST_TOKEN = process.env.GIST_TOKEN || '';
+const GIST_ID    = process.env.GIST_ID    || '';
 
 let DB = {
     players:{}, roulette:{},
@@ -12,65 +13,91 @@ let DB = {
     stats:{
         totalRegistered: 0,
         totalSessions: 0,
-        worldPlays: {},   // { gather: 42, parkour: 17, ... }
-        dailyActive: {},  // { "2025-01-15": 5, ... }
-        firstSeenDates: [] // массив дат первых регистраций для графика
+        worldPlays: {},
+        dailyActive: {},
+        firstSeenDates: []
     }
 };
 
+function fixDB(){
+    if(!DB.credits) DB.credits={credits:{},borrows:{}};
+    if(!DB.credits.credits) DB.credits.credits={};
+    if(!DB.credits.borrows) DB.credits.borrows={};
+    if(!DB.studioSync) DB.studioSync={};
+    if(!DB.bans) DB.bans={};
+    if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
+}
+
 function loadLocalDB(){
-    try{ const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8')); if(d&&typeof d==='object'){DB={...DB,...d};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};if(!DB.stats)DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};} console.log('✓ local DB loaded'); }catch(e){}
+    try{
+        const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8'));
+        if(d&&typeof d==='object'){ DB={...DB,...d}; fixDB(); }
+        console.log('✓ local DB loaded, players:'+Object.keys(DB.players).length);
+    }catch(e){}
 }
 
 function loadDB(){
-    if(!JSONBIN_KEY||!JSONBIN_BIN){ loadLocalDB(); return Promise.resolve(); }
+    if(!GIST_TOKEN||!GIST_ID){ loadLocalDB(); return Promise.resolve(); }
     return new Promise(resolve=>{
-        const req=https.request({hostname:'api.jsonbin.io',path:`/v3/b/${JSONBIN_BIN}/latest`,method:'GET',headers:{'X-Master-Key':JSONBIN_KEY}},res=>{
+        const req=https.request({
+            hostname:'api.github.com',
+            path:`/gists/${GIST_ID}`,
+            method:'GET',
+            headers:{'Authorization':'token '+GIST_TOKEN,'User-Agent':'citrus-game','Accept':'application/vnd.github.v3+json'}
+        }, res=>{
             let s=''; res.on('data',c=>s+=c);
             res.on('end',()=>{
-                try{ const d=JSON.parse(s); if(d.record&&typeof d.record==='object'){DB={...DB,...d.record};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};if(!DB.stats)DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};console.log('✓ JSONBin DB loaded');} }catch(e){loadLocalDB();}
+                try{
+                    const gist=JSON.parse(s);
+                    const content=gist.files&&gist.files['citrus_db.json']&&gist.files['citrus_db.json'].content;
+                    if(content){
+                        const d=JSON.parse(content);
+                        if(d&&typeof d==='object'){ DB={...DB,...d}; fixDB(); }
+                        console.log('✅ Gist DB loaded, players:'+Object.keys(DB.players).length);
+                    }
+                }catch(e){ console.error('❌ Gist load error:',e.message); loadLocalDB(); }
                 resolve();
             });
         });
-        req.on('error',()=>{ loadLocalDB(); resolve(); }); req.end();
+        req.on('error',()=>{ console.error('❌ Gist unreachable'); loadLocalDB(); resolve(); });
+        req.end();
     });
 }
 
 let _st=null;
 function saveDB(){
-    // Всегда пишем полную копию локально
-    try{ fs.writeFileSync('/tmp/citrus_db.json',JSON.stringify(DB)); }catch(e){ console.error('❌ local save failed:',e.message); }
-    if(!JSONBIN_KEY||!JSONBIN_BIN) return;
+    // Всегда пишем локально
+    try{ fs.writeFileSync('/tmp/citrus_db.json',JSON.stringify(DB)); }catch(e){}
+    if(!GIST_TOKEN||!GIST_ID) return;
     if(_st) clearTimeout(_st);
     _st=setTimeout(()=>{
         // Не сохраняем studioSync — он большой и временный
-        const toSave = {...DB, studioSync:{}};
-        const payload = JSON.stringify(toSave);
-        const kb = (Buffer.byteLength(payload)/1024).toFixed(1);
-        console.log(`💾 saving to JSONBin: ${kb}KB`);
-        if(Buffer.byteLength(payload) > 90*1024){
-            // Слишком большой — чистим старые игроки без имени и большие данные
-            toSave.players = Object.fromEntries(
-                Object.entries(toSave.players).filter(([,p])=>p.name)
-            );
-            console.warn('⚠️ DB too large, trimmed anonymous players');
-        }
-        const trimmed = JSON.stringify(toSave);
+        const toSave={...DB, studioSync:{}};
+        const payload=JSON.stringify(toSave);
+        const kb=(Buffer.byteLength(payload)/1024).toFixed(1);
+        console.log(`💾 saving to Gist: ${kb}KB`);
+        const body=JSON.stringify({files:{'citrus_db.json':{content:payload}}});
         const req=https.request({
-            hostname:'api.jsonbin.io',
-            path:`/v3/b/${JSONBIN_BIN}`,
-            method:'PUT',
-            headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN_KEY,'Content-Length':Buffer.byteLength(trimmed)}
+            hostname:'api.github.com',
+            path:`/gists/${GIST_ID}`,
+            method:'PATCH',
+            headers:{
+                'Authorization':'token '+GIST_TOKEN,
+                'User-Agent':'citrus-game',
+                'Accept':'application/vnd.github.v3+json',
+                'Content-Type':'application/json',
+                'Content-Length':Buffer.byteLength(body)
+            }
         }, res=>{
             let s=''; res.on('data',c=>s+=c);
             res.on('end',()=>{
-                if(res.statusCode===200) console.log('✅ JSONBin saved OK');
-                else console.error('❌ JSONBin error:',res.statusCode, s.slice(0,200));
+                if(res.statusCode===200) console.log('✅ Gist saved OK, '+kb+'KB');
+                else console.error('❌ Gist save error:',res.statusCode,s.slice(0,300));
             });
         });
-        req.on('error',(e)=>console.error('❌ JSONBin request error:',e.message));
-        req.write(trimmed); req.end();
-    }, 2000);
+        req.on('error',e=>console.error('❌ Gist request error:',e.message));
+        req.write(body); req.end();
+    }, 3000);
 }
 
 const mailbox={},online={},positions={};
@@ -83,7 +110,7 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL('http://x'+req.url);
     const parts=url.pathname.split('/').filter(Boolean);
 
-    if(req.method==='GET'&&parts[0]==='ping') return reply(res,200,{ok:true, players:Object.keys(DB.players).length, jsonbin: !!(JSONBIN_KEY&&JSONBIN_BIN) });
+    if(req.method==='GET'&&parts[0]==='ping') return reply(res,200,{ok:true, players:Object.keys(DB.players).length, storage: (GIST_TOKEN&&GIST_ID)?'gist':'local' });
 
     // Бэкап БД (только с adminKey)
     if(req.method==='GET'&&parts[0]==='backup'){
