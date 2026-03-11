@@ -349,7 +349,7 @@ server.on('upgrade',(req,socket)=>{
             if(!msg)continue;
             if(msg.type==='join'){
                 client.userId=msg.id;client.map=msg.map;client.name=(msg.name||'').toLowerCase();
-                // Отправить кэшированные позиции без ограничения по времени
+                // Отправить кэшированные позиции
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
                         wsWrite(socket,p);
@@ -361,12 +361,30 @@ server.on('upgrade',(req,socket)=>{
                 });
             }
             if(msg.type==='move'){client.map=msg.map;positions[msg.id]={...msg,ts:Date.now()};broadcastToMap(msg.map,msg,msg.id);}
+            if(msg.type==='leave'){
+                // Игрок явно вышел — сообщаем всем в его карте
+                if(client.map) broadcastToMap(client.map,{type:'leave',id:msg.id},msg.id);
+                delete positions[msg.id];
+                client.map=null;
+            }
             if(msg.type==='studio_join'){client.studioSession=msg.sessionId;client.userId=msg.userId;}
             if(msg.type==='studio_block'||msg.type==='studio_clear'){broadcastToSession(msg.sessionId,msg,msg.userId);}
         }
     });
-    socket.on('close',()=>wsClients.delete(cid));
-    socket.on('error',()=>wsClients.delete(cid));
+    socket.on('close',()=>{
+        if(client.userId && client.map){
+            broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId);
+            delete positions[client.userId];
+        }
+        wsClients.delete(cid);
+    });
+    socket.on('error',()=>{
+        if(client.userId && client.map){
+            broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId);
+            delete positions[client.userId];
+        }
+        wsClients.delete(cid);
+    });
 });
 
 loadDB().then(()=>{
