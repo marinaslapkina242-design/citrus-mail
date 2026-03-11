@@ -8,11 +8,18 @@ const JSONBIN_BIN = process.env.JSONBIN_BIN || '';
 let DB = {
     players:{}, roulette:{},
     credits:{ credits:{}, borrows:{} },
-    games:{}, studioSync:{}, bans:{}
+    games:{}, studioSync:{}, bans:{},
+    stats:{
+        totalRegistered: 0,
+        totalSessions: 0,
+        worldPlays: {},   // { gather: 42, parkour: 17, ... }
+        dailyActive: {},  // { "2025-01-15": 5, ... }
+        firstSeenDates: [] // массив дат первых регистраций для графика
+    }
 };
 
 function loadLocalDB(){
-    try{ const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8')); if(d&&typeof d==='object'){DB={...DB,...d};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};} console.log('✓ local DB loaded'); }catch(e){}
+    try{ const d=JSON.parse(fs.readFileSync('/tmp/citrus_db.json','utf8')); if(d&&typeof d==='object'){DB={...DB,...d};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};if(!DB.stats)DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};} console.log('✓ local DB loaded'); }catch(e){}
 }
 
 function loadDB(){
@@ -21,7 +28,7 @@ function loadDB(){
         const req=https.request({hostname:'api.jsonbin.io',path:`/v3/b/${JSONBIN_BIN}/latest`,method:'GET',headers:{'X-Master-Key':JSONBIN_KEY}},res=>{
             let s=''; res.on('data',c=>s+=c);
             res.on('end',()=>{
-                try{ const d=JSON.parse(s); if(d.record&&typeof d.record==='object'){DB={...DB,...d.record};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};console.log('✓ JSONBin DB loaded');} }catch(e){loadLocalDB();}
+                try{ const d=JSON.parse(s); if(d.record&&typeof d.record==='object'){DB={...DB,...d.record};if(!DB.credits)DB.credits={credits:{},borrows:{}};if(!DB.credits.credits)DB.credits.credits={};if(!DB.credits.borrows)DB.credits.borrows={};if(!DB.studioSync)DB.studioSync={};if(!DB.bans)DB.bans={};if(!DB.stats)DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};console.log('✓ JSONBin DB loaded');} }catch(e){loadLocalDB();}
                 resolve();
             });
         });
@@ -55,7 +62,17 @@ const server=http.createServer(async(req,res)=>{
 
     // Players
     if(req.method==='POST'&&parts[0]==='players'&&parts[1]){
-        const p=await body(req); DB.players[parts[1]]={...p,id:parts[1],ts:Date.now()}; saveDB(); return reply(res,200,{ok:true});
+        const p=await body(req);
+        const isNew = !DB.players[parts[1]];
+        DB.players[parts[1]]={...p,id:parts[1],ts:Date.now()};
+        if(isNew){
+            if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
+            DB.stats.totalRegistered = Object.keys(DB.players).length;
+            const today = new Date().toISOString().slice(0,10);
+            DB.stats.firstSeenDates = DB.stats.firstSeenDates||[];
+            DB.stats.firstSeenDates.push(today);
+        }
+        saveDB(); return reply(res,200,{ok:true});
     }
     if(req.method==='GET'&&parts[0]==='players'&&parts[1]==='search'){
         const q=(url.searchParams.get('q')||'').toLowerCase();
@@ -67,8 +84,19 @@ const server=http.createServer(async(req,res)=>{
 
     // Online
     if(req.method==='POST'&&parts[0]==='online'&&parts[1]){
-        const p=await body(req); online[parts[1]]={...p,id:parts[1],ts:Date.now()};
+        const p=await body(req);
+        const wasOffline = !online[parts[1]] || Date.now()-(online[parts[1]].ts||0) > 3*60*1000;
+        online[parts[1]]={...p,id:parts[1],ts:Date.now()};
         if(!DB.players[parts[1]]){DB.players[parts[1]]={...p,id:parts[1]};saveDB();}
+        // Считаем уникальные дневные сессии
+        if(wasOffline){
+            if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
+            DB.stats.totalSessions = (DB.stats.totalSessions||0) + 1;
+            const today = new Date().toISOString().slice(0,10);
+            if(!DB.stats.dailyActive) DB.stats.dailyActive={};
+            DB.stats.dailyActive[today] = (DB.stats.dailyActive[today]||0) + 1;
+            saveDB();
+        }
         return reply(res,200,{ok:true});
     }
     if(req.method==='GET'&&parts[0]==='online'&&!parts[1]){
@@ -216,6 +244,26 @@ const server=http.createServer(async(req,res)=>{
         const map=url.searchParams.get('map');
         const now=Date.now();
         return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
+    }
+
+    // Stats
+    if(req.method==='GET'&&parts[0]==='stats'){
+        if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
+        DB.stats.totalRegistered = Object.keys(DB.players).length;
+        const allAccounts = Object.values(DB.players).map(p=>({
+            id:p.id, name:p.name||'?', tag:p.tag||'', color:p.color||'#888',
+            ts: p.ts||0
+        })).sort((a,b)=>b.ts-a.ts);
+        return reply(res,200,{...DB.stats, allAccounts});
+    }
+    if(req.method==='POST'&&parts[0]==='stats'&&parts[1]==='world'){
+        const d=await body(req);
+        if(!d.world) return reply(res,400,{ok:false});
+        if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
+        if(!DB.stats.worldPlays) DB.stats.worldPlays={};
+        DB.stats.worldPlays[d.world] = (DB.stats.worldPlays[d.world]||0) + 1;
+        saveDB();
+        return reply(res,200,{ok:true});
     }
 
     // Bans
