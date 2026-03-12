@@ -461,10 +461,12 @@ const server=http.createServer(async(req,res)=>{
     // POST /dm/:chatId — отправить сообщение
     if(req.method==='POST'&&parts[0]==='dm'&&parts[1]){
         const d=await body(req);
+        if(!d.from) return reply(res,400,{error:'missing from'});
+        if(!d.text||!d.text.trim()) return reply(res,400,{error:'empty message'});
         if(!DB.dm) DB.dm={};
         if(!DB.dm[parts[1]]) DB.dm[parts[1]]=[];
         const msg={id:Date.now()+'_'+Math.random().toString(36).slice(2,5),
-            from:String(d.from), fromName:d.fromName||'?', text:d.text||'',
+            from:String(d.from), fromName:d.fromName||'?', text:d.text.trim(),
             ts:Date.now(), read:false};
         DB.dm[parts[1]].push(msg);
         // Храним только последние 200 сообщений
