@@ -356,9 +356,14 @@ const server=http.createServer(async(req,res)=>{
         if(!nft) return reply(res,404,{error:'not found'});
         if(!nft.onMarket) return reply(res,400,{error:'not on market'});
         if(nft.opened) return reply(res,400,{error:'already opened'});
+        // Создаём игрока если его нет в DB (баланс берём из запроса)
+        if(!DB.players[d.buyerId]){
+            DB.players[d.buyerId]={id:String(d.buyerId),name:d.buyerName||'',balance:d.buyerBalance||0};
+        }
         const buyer=DB.players[d.buyerId];
-        if(!buyer) return reply(res,404,{error:'player not found'});
-        if((buyer.balance||0)<nft.price) return reply(res,400,{error:'not enough balance'});
+        // Синхронизируем баланс — берём максимум из DB и переданного
+        if((d.buyerBalance||0)>=(buyer.balance||0)) buyer.balance=d.buyerBalance||0;
+        if(nft.price>0&&(buyer.balance||0)<nft.price) return reply(res,400,{error:'not enough balance'});
         buyer.balance=(buyer.balance||0)-nft.price;
         nft.ownerId=String(d.buyerId); nft.ownerName=d.buyerName||buyer.name;
         nft.onMarket=false;
