@@ -328,7 +328,7 @@ const server=http.createServer(async(req,res)=>{
         const nft={
             id, emoji:d.emoji||'🎁', name:d.name||'Подарок',
             desc:d.desc||'', price:d.price||0, rarity:d.rarity||'common',
-            reward:d.reward||100,
+            reward:d.reward||100, maxReward:d.reward||100,
             by:d.by||'Разраб', ts:Date.now(),
             priceHistory:[{price:d.price||0, ts:Date.now()}],
             ownerId: d.giftTo||null, ownerName: d.giftToName||null,
@@ -376,8 +376,9 @@ const server=http.createServer(async(req,res)=>{
         if(!nft) return reply(res,404,{error:'not found'});
         if(nft.opened) return reply(res,400,{error:'already opened'});
         if(String(nft.ownerId)!==String(d.playerId)) return reply(res,403,{error:'not your gift'});
-        const reward=nft.reward||nft.minReward||1;
-        nft.opened=true; nft.reward=reward; nft.openedAt=Date.now();
+        const maxReward=nft.maxReward||nft.reward||100;
+        const reward=Math.floor(Math.random()*maxReward)+1;
+        nft.opened=true; nft.openedReward=reward; nft.openedAt=Date.now();
         const player=DB.players[d.playerId];
         if(player){ player.balance=(player.balance||0)+reward; }
         saveDB(); return reply(res,200,{ok:true,reward,nft});
