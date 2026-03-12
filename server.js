@@ -28,6 +28,7 @@ function fixDB(){
     if(!DB.bans) DB.bans={};
     if(!DB.nfts) DB.nfts={};
     if(!DB.pendingEarnings) DB.pendingEarnings={};
+    if(!DB.dm) DB.dm={};
     if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
 }
 
@@ -434,6 +435,7 @@ const server=http.createServer(async(req,res)=>{
         const nft=DB.nfts[parts[1]];
         if(!nft) return reply(res,404,{error:'not found'});
         if(nft.opened) return reply(res,400,{error:'already opened'});
+        if(nft.onMarket) return reply(res,400,{error:'on market, remove first'});
         if(String(nft.ownerId)!==String(d.playerId)) return reply(res,403,{error:'not your gift'});
         const maxReward=nft.maxReward||nft.reward||100;
         const reward=Math.floor(Math.random()*maxReward)+1;
@@ -447,6 +449,46 @@ const server=http.createServer(async(req,res)=>{
         if(!DB.nfts) DB.nfts={};
         const pid=String(parts[2]);
         return reply(res,200, Object.values(DB.nfts).filter(n=>String(n.ownerId)===pid));
+    }
+
+    // ══════════ ЛИЧНЫЕ СООБЩЕНИЯ ══════════
+
+    // GET /dm/:chatId — получить сообщения (chatId = sorted userId1_userId2)
+    if(req.method==='GET'&&parts[0]==='dm'&&parts[1]){
+        if(!DB.dm) DB.dm={};
+        return reply(res,200, DB.dm[parts[1]]||[]);
+    }
+    // POST /dm/:chatId — отправить сообщение
+    if(req.method==='POST'&&parts[0]==='dm'&&parts[1]){
+        const d=await body(req);
+        if(!DB.dm) DB.dm={};
+        if(!DB.dm[parts[1]]) DB.dm[parts[1]]=[];
+        const msg={id:Date.now()+'_'+Math.random().toString(36).slice(2,5),
+            from:String(d.from), fromName:d.fromName||'?', text:d.text||'',
+            ts:Date.now(), read:false};
+        DB.dm[parts[1]].push(msg);
+        // Храним только последние 200 сообщений
+        if(DB.dm[parts[1]].length>200) DB.dm[parts[1]]=DB.dm[parts[1]].slice(-200);
+        saveDB(); return reply(res,200,{ok:true,msg});
+    }
+    // POST /dm/:chatId/read — пометить прочитанными
+    if(req.method==='POST'&&parts[0]==='dm'&&parts[2]==='read'){
+        const d=await body(req);
+        if(!DB.dm||!DB.dm[parts[1]]) return reply(res,200,{ok:true});
+        DB.dm[parts[1]].forEach(m=>{ if(String(m.from)!==String(d.userId)) m.read=true; });
+        saveDB(); return reply(res,200,{ok:true});
+    }
+    // GET /dm/unread/:userId — сколько непрочитанных со всех чатов
+    if(req.method==='GET'&&parts[0]==='dm'&&parts[1]==='unread'){
+        if(!DB.dm) return reply(res,200,{count:0,chats:{}});
+        const uid=String(parts[2]);
+        let count=0; const chats={};
+        Object.entries(DB.dm).forEach(([chatId,msgs])=>{
+            if(!chatId.includes(uid)) return;
+            const unread=msgs.filter(m=>String(m.from)!==uid&&!m.read).length;
+            if(unread>0){ chats[chatId]=unread; count+=unread; }
+        });
+        return reply(res,200,{count,chats});
     }
 
     // Leaderboard — топ по балансу (из DB.players, всегда актуально)
