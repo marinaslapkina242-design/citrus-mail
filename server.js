@@ -103,7 +103,7 @@ function saveDB(){
 }
 
 const mailbox={},online={},positions={};
-const H={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Content-Type':'application/json'};
+const H={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,DELETE,PATCH,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Content-Type':'application/json'};
 const reply=(res,code,data)=>{ res.writeHead(code,H); res.end(JSON.stringify(data)); };
 const body=req=>new Promise(ok=>{ let s=''; req.on('data',c=>s+=c); req.on('end',()=>{ try{ok(JSON.parse(s))}catch{ok({})} }); });
 
