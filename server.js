@@ -10,6 +10,7 @@ let DB = {
     players:{}, roulette:{},
     credits:{ credits:{}, borrows:{} },
     games:{}, studioSync:{}, bans:{},
+    nfts:{}, // id -> {id,emoji,name,desc,price,rarity,minReward,maxReward,by,ts,priceHistory:[],ownerId,ownerName,opened}
     stats:{
         totalRegistered: 0,
         totalSessions: 0,
@@ -25,6 +26,7 @@ function fixDB(){
     if(!DB.credits.borrows) DB.credits.borrows={};
     if(!DB.studioSync) DB.studioSync={};
     if(!DB.bans) DB.bans={};
+    if(!DB.nfts) DB.nfts={};
     if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
 }
 
@@ -309,6 +311,77 @@ const server=http.createServer(async(req,res)=>{
         const map=url.searchParams.get('map');
         const now=Date.now();
         return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
+    }
+
+    // ══════════ NFT ПОДАРКИ ══════════
+
+    // GET /nfts — все подарки на маркете (не открытые, без владельца или на продаже)
+    if(req.method==='GET'&&parts[0]==='nfts'&&!parts[1]){
+        if(!DB.nfts) DB.nfts={};
+        return reply(res,200, Object.values(DB.nfts));
+    }
+    // POST /nfts — создать подарок (только разраб)
+    if(req.method==='POST'&&parts[0]==='nfts'&&!parts[1]){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        const id='nft_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+        const nft={
+            id, emoji:d.emoji||'🎁', name:d.name||'Подарок',
+            desc:d.desc||'', price:d.price||0, rarity:d.rarity||'common',
+            minReward:d.minReward||1, maxReward:d.maxReward||1000,
+            by:d.by||'Разраб', ts:Date.now(),
+            priceHistory:[{price:d.price||0, ts:Date.now()}],
+            ownerId: d.giftTo||null, ownerName: d.giftToName||null,
+            opened:false, onMarket: !d.giftTo
+        };
+        DB.nfts[id]=nft; saveDB();
+        return reply(res,200,{ok:true,nft});
+    }
+    // PATCH /nfts/:id/price — разраб меняет цену (влияет на график)
+    if(req.method==='PATCH'&&parts[0]==='nfts'&&parts[2]==='price'){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        const nft=DB.nfts[parts[1]];
+        if(!nft) return reply(res,404,{error:'not found'});
+        nft.price=d.price;
+        nft.priceHistory=nft.priceHistory||[];
+        nft.priceHistory.push({price:d.price, ts:Date.now()});
+        if(nft.priceHistory.length>50) nft.priceHistory=nft.priceHistory.slice(-50);
+        saveDB(); return reply(res,200,{ok:true,nft});
+    }
+    // POST /nfts/:id/buy — купить подарок
+    if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='buy'){
+        const d=await body(req);
+        const nft=DB.nfts[parts[1]];
+        if(!nft) return reply(res,404,{error:'not found'});
+        if(!nft.onMarket) return reply(res,400,{error:'not on market'});
+        if(nft.opened) return reply(res,400,{error:'already opened'});
+        const buyer=DB.players[d.buyerId];
+        if(!buyer) return reply(res,404,{error:'player not found'});
+        if((buyer.balance||0)<nft.price) return reply(res,400,{error:'not enough balance'});
+        buyer.balance=(buyer.balance||0)-nft.price;
+        nft.ownerId=String(d.buyerId); nft.ownerName=d.buyerName||buyer.name;
+        nft.onMarket=false;
+        saveDB(); return reply(res,200,{ok:true,nft,newBalance:buyer.balance});
+    }
+    // POST /nfts/:id/open — открыть подарок (как кейс)
+    if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='open'){
+        const d=await body(req);
+        const nft=DB.nfts[parts[1]];
+        if(!nft) return reply(res,404,{error:'not found'});
+        if(nft.opened) return reply(res,400,{error:'already opened'});
+        if(String(nft.ownerId)!==String(d.playerId)) return reply(res,403,{error:'not your gift'});
+        const reward=Math.floor(nft.minReward+Math.random()*(nft.maxReward-nft.minReward+1));
+        nft.opened=true; nft.reward=reward; nft.openedAt=Date.now();
+        const player=DB.players[d.playerId];
+        if(player){ player.balance=(player.balance||0)+reward; }
+        saveDB(); return reply(res,200,{ok:true,reward,nft});
+    }
+    // GET /nfts/player/:id — подарки игрока
+    if(req.method==='GET'&&parts[0]==='nfts'&&parts[1]==='player'){
+        if(!DB.nfts) DB.nfts={};
+        const pid=String(parts[2]);
+        return reply(res,200, Object.values(DB.nfts).filter(n=>String(n.ownerId)===pid));
     }
 
     // Leaderboard — топ по балансу (из DB.players, всегда актуально)
