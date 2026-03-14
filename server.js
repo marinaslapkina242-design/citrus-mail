@@ -227,8 +227,21 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='DELETE'&&parts[0]==='games'&&parts[1]){
         const g=DB.games[parts[1]];
         if(!g)return reply(res,404,{error:'not found'});
-        if(String(g.authorId)!==String(url.searchParams.get('authorId')))return reply(res,403,{error:'forbidden'});
+        // Разраб может удалять любые игры
+        const isAdminDel = url.searchParams.get('adminKey')==='citrus_admin_2025';
+        if(!isAdminDel && String(g.authorId)!==String(url.searchParams.get('authorId')))return reply(res,403,{error:'forbidden'});
         delete DB.games[parts[1]]; saveDB(); return reply(res,200,{ok:true});
+    }
+    // POST /games/:id/verify — подтвердить/снять подтверждение (только разраб)
+    if(req.method==='POST'&&parts[0]==='games'&&parts[2]==='verify'){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        const g=DB.games[parts[1]];
+        if(!g) return reply(res,404,{error:'not found'});
+        g.verified = !!d.verified;
+        g.verifiedAt = d.verified ? Date.now() : null;
+        saveDB();
+        return reply(res,200,{ok:true, verified:g.verified});
     }
 
     // Roulette
