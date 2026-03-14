@@ -10,7 +10,7 @@ let DB = {
     players:{}, roulette:{},
     credits:{ credits:{}, borrows:{} },
     games:{}, studioSync:{}, bans:{},
-    nfts:{}, // id -> {id,emoji,name,desc,price,rarity,minReward,maxReward,by,ts,priceHistory:[],ownerId,ownerName,opened}
+    nfts:{}, support:{}, // id -> {id,emoji,name,desc,price,rarity,minReward,maxReward,by,ts,priceHistory:[],ownerId,ownerName,opened}
     stats:{
         totalRegistered: 0,
         totalSessions: 0,
@@ -28,6 +28,7 @@ function fixDB(){
     if(!DB.bans) DB.bans={};
     if(!DB.nfts) DB.nfts={};
     if(!DB.pendingEarnings) DB.pendingEarnings={};
+    if(!DB.support) DB.support={};
     if(!DB.dm) DB.dm={};
     if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
 }
@@ -519,7 +520,7 @@ const server=http.createServer(async(req,res)=>{
         const d=await body(req);
         if(!d.world) return reply(res,400,{ok:false});
         // Записываем только официальные миры
-        const OFFICIAL=['gather','parkour','volcano','space','race','dropper','obby','maze'];
+        const OFFICIAL=['gather','parkour','volcano','space','race','dropper','obby','maze','coins','pvp','hideseek','dungeon'];
         if(!OFFICIAL.includes(d.world)) return reply(res,200,{ok:true});
         if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
         if(!DB.stats.worldPlays) DB.stats.worldPlays={};
@@ -559,6 +560,59 @@ const server=http.createServer(async(req,res)=>{
         const key=decodeURIComponent(parts[1]).toLowerCase();
         const ban=DB.bans[key];
         return ban?reply(res,200,{banned:true,...ban}):reply(res,200,{banned:false});
+    }
+
+    // ══════════ ПОДДЕРЖКА ══════════
+
+    // GET /support?adminKey=... — все письма (разраб)
+    if(req.method==='GET'&&parts[0]==='support'&&!parts[1]){
+        const key=url.searchParams.get('adminKey');
+        if(key!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        if(!DB.support) DB.support={};
+        const letters = Object.values(DB.support).sort((a,b)=>b.ts-a.ts);
+        return reply(res,200,letters);
+    }
+    // GET /support/player/:id — письма игрока
+    if(req.method==='GET'&&parts[0]==='support'&&parts[1]==='player'){
+        if(!DB.support) DB.support={};
+        const pid=String(parts[2]);
+        const letters = Object.values(DB.support).filter(l=>String(l.fromId)===pid).sort((a,b)=>b.ts-a.ts);
+        return reply(res,200,letters);
+    }
+    // POST /support — отправить письмо
+    if(req.method==='POST'&&parts[0]==='support'&&!parts[1]){
+        const d=await body(req);
+        if(!d.fromId||!d.text) return reply(res,400,{error:'bad'});
+        if(!DB.support) DB.support={};
+        const id='sup_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+        DB.support[id]={id, fromId:String(d.fromId), fromName:d.fromName||'?',
+            type:d.type||'help', text:d.text.trim().slice(0,1000),
+            ts:Date.now(), reply:null, repliedAt:null};
+        saveDB();
+        return reply(res,200,{ok:true,id});
+    }
+    // POST /support/:id/reply — ответ разраба
+    if(req.method==='POST'&&parts[0]==='support'&&parts[2]==='reply'){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        if(!DB.support||!DB.support[parts[1]]) return reply(res,404,{error:'not found'});
+        DB.support[parts[1]].reply = d.reply.trim().slice(0,1000);
+        DB.support[parts[1]].repliedAt = Date.now();
+        saveDB();
+        return reply(res,200,{ok:true});
+    }
+    // DELETE /support/:id — удалить письмо
+    if(req.method==='DELETE'&&parts[0]==='support'&&parts[1]){
+        const d=await body(req);
+        if(!DB.support||!DB.support[parts[1]]) return reply(res,404,{error:'not found'});
+        const letter = DB.support[parts[1]];
+        // Разраб или сам игрок
+        const isAdmin = d.adminKey==='citrus_admin_2025';
+        const isOwner = String(letter.fromId)===String(d.playerId);
+        if(!isAdmin&&!isOwner) return reply(res,403,{error:'forbidden'});
+        delete DB.support[parts[1]];
+        saveDB();
+        return reply(res,200,{ok:true});
     }
 
     reply(res,404,{error:'not found'});
