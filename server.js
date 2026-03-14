@@ -519,7 +519,7 @@ const server=http.createServer(async(req,res)=>{
         const d=await body(req);
         if(!d.world) return reply(res,400,{ok:false});
         // Записываем только официальные миры
-        const OFFICIAL=['gather','parkour','volcano','space','race','dropper','obby','maze','dungeon'];
+        const OFFICIAL=['gather','parkour','volcano','space','race','dropper','obby','maze'];
         if(!OFFICIAL.includes(d.world)) return reply(res,200,{ok:true});
         if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
         if(!DB.stats.worldPlays) DB.stats.worldPlays={};
