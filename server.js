@@ -185,6 +185,21 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='DELETE'&&parts[0]==='mail'&&parts[1]){mailbox[parts[1]]=[]; return reply(res,200,{ok:true});}
 
     // Games
+    // GET /games/:id — получить конкретную карту по ID
+    if(req.method==='GET'&&parts[0]==='games'&&parts[1]){
+        const g=DB.games[parts[1]];
+        if(!g){
+            // Ищем в резервных копиях профилей
+            let found=null;
+            Object.values(DB.players||{}).forEach(p=>{
+                (p.publishedGames||[]).forEach(pg=>{ if(pg.id===parts[1]) found=pg; });
+            });
+            if(found){ DB.games[parts[1]]=found; saveDB(); return reply(res,200,found); }
+            return reply(res,404,{error:'not found'});
+        }
+        return reply(res,200,g);
+    }
+    // GET /games — список всех карт
     if(req.method==='GET'&&parts[0]==='games'&&!parts[1]){
         // Восстанавливаем из профилей если DB.games пустая (после рестарта без JSONBin)
         if(Object.keys(DB.games).length===0){
@@ -243,7 +258,6 @@ const server=http.createServer(async(req,res)=>{
         const existing=Object.values(DB.credits.credits||{}).find(c=>String(c.lenderId)===String(d.lenderId));
         if(existing)return reply(res,400,{ok:false,error:'У тебя уже есть активный кредит'});
         const id='c_'+d.lenderId+'_'+Date.now();
-        // Создаём кредит — баланс снимает клиент и присылает нам
         if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
         if(d.newBalance !== undefined) DB.players[d.lenderId].balance = d.newBalance;
         DB.credits.credits[id]={id,lenderId:d.lenderId,lenderName:d.lenderName,amount:d.amount,days:d.days,borrowerId:null,borrowerName:null,createdAt:Date.now()};
@@ -280,7 +294,6 @@ const server=http.createServer(async(req,res)=>{
         if(!credit||String(credit.lenderId)!==String(d.lenderId))return reply(res,404,{ok:false});
         if(credit.borrowerId)return reply(res,400,{ok:false,error:'Уже взят, нельзя отозвать'});
         const amt=credit.amount;
-        // Возвращаем деньги кредитору на сервере
         if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
         DB.players[d.lenderId].balance=(DB.players[d.lenderId].balance||0)+amt;
         delete DB.credits.credits[d.creditId]; saveDB();
@@ -317,12 +330,10 @@ const server=http.createServer(async(req,res)=>{
 
     // ══════════ NFT ПОДАРКИ ══════════
 
-    // GET /nfts — все подарки на маркете (не открытые, без владельца или на продаже)
     if(req.method==='GET'&&parts[0]==='nfts'&&!parts[1]){
         if(!DB.nfts) DB.nfts={};
         return reply(res,200, Object.values(DB.nfts));
     }
-    // POST /nfts — создать подарок (только разраб)
     if(req.method==='POST'&&parts[0]==='nfts'&&!parts[1]){
         const d=await body(req);
         if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
@@ -339,7 +350,6 @@ const server=http.createServer(async(req,res)=>{
         DB.nfts[id]=nft; saveDB();
         return reply(res,200,{ok:true,nft});
     }
-    // PATCH /nfts/:id/price — разраб меняет цену (влияет на график)
     if(req.method==='PATCH'&&parts[0]==='nfts'&&parts[2]==='price'){
         const d=await body(req);
         if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
@@ -351,7 +361,6 @@ const server=http.createServer(async(req,res)=>{
         if(nft.priceHistory.length>50) nft.priceHistory=nft.priceHistory.slice(-50);
         saveDB(); return reply(res,200,{ok:true,nft});
     }
-    // POST /nfts/:id/buy — купить подарок
     if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='buy'){
         const d=await body(req);
         const nft=DB.nfts[parts[1]];
@@ -359,20 +368,14 @@ const server=http.createServer(async(req,res)=>{
         if(!nft.onMarket) return reply(res,400,{error:'not on market'});
         if(nft.opened) return reply(res,400,{error:'already opened'});
         if(String(nft.ownerId)===String(d.buyerId)) return reply(res,400,{error:'your own nft'});
-        // Создаём покупателя если нет
         if(!DB.players[d.buyerId]) DB.players[d.buyerId]={id:String(d.buyerId),name:d.buyerName||'',balance:d.buyerBalance||0};
         const buyer=DB.players[d.buyerId];
         if((d.buyerBalance||0)>=(buyer.balance||0)) buyer.balance=d.buyerBalance||0;
         if(nft.price>0&&(buyer.balance||0)<nft.price) return reply(res,400,{error:'not enough balance'});
         buyer.balance=(buyer.balance||0)-nft.price;
-
-        // Если у подарка был продавец-игрок (не разраб) — начисляем ему заработок
         const prevOwnerId=nft.sellerId||nft.ownerId;
-        const isDevSeller=!nft.sellerIsPlayer; // если выставил разраб — деньги просто сгорают
         if(nft.sellerIsPlayer && prevOwnerId && String(prevOwnerId)!==String(d.buyerId)){
             if(!DB.players[prevOwnerId]) DB.players[prevOwnerId]={id:String(prevOwnerId),balance:0};
-            const seller=DB.players[prevOwnerId];
-            // Копим заработок офлайн продавца
             if(!DB.pendingEarnings) DB.pendingEarnings={};
             if(!DB.pendingEarnings[prevOwnerId]) DB.pendingEarnings[prevOwnerId]={total:0,sales:[]};
             DB.pendingEarnings[prevOwnerId].total=(DB.pendingEarnings[prevOwnerId].total||0)+nft.price;
@@ -381,12 +384,10 @@ const server=http.createServer(async(req,res)=>{
                 price:nft.price, buyerName:d.buyerName||'Игрок', ts:Date.now()
             });
         }
-
         nft.ownerId=String(d.buyerId); nft.ownerName=d.buyerName||buyer.name;
         nft.onMarket=false; nft.sellerId=null; nft.sellerIsPlayer=false;
         saveDB(); return reply(res,200,{ok:true,nft,newBalance:buyer.balance});
     }
-    // POST /nfts/:id/sell — игрок выставляет свой подарок на продажу
     if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='sell'){
         const d=await body(req);
         const nft=DB.nfts[parts[1]];
@@ -395,16 +396,13 @@ const server=http.createServer(async(req,res)=>{
         if(String(nft.ownerId)!==String(d.playerId)) return reply(res,403,{error:'not your nft'});
         const sellPrice=parseInt(d.price)||nft.price||0;
         if(sellPrice<1) return reply(res,400,{error:'price must be > 0'});
-        nft.onMarket=true;
-        nft.price=sellPrice;
-        nft.sellerId=String(d.playerId);
-        nft.sellerName=d.playerName||'';
+        nft.onMarket=true; nft.price=sellPrice;
+        nft.sellerId=String(d.playerId); nft.sellerName=d.playerName||'';
         nft.sellerIsPlayer=true;
         nft.priceHistory=nft.priceHistory||[];
         nft.priceHistory.push({price:sellPrice,ts:Date.now()});
         saveDB(); return reply(res,200,{ok:true,nft});
     }
-    // POST /nfts/:id/unsell — снять с продажи
     if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='unsell'){
         const d=await body(req);
         const nft=DB.nfts[parts[1]];
@@ -413,12 +411,10 @@ const server=http.createServer(async(req,res)=>{
         nft.onMarket=false; nft.sellerId=null; nft.sellerIsPlayer=false;
         saveDB(); return reply(res,200,{ok:true,nft});
     }
-    // GET /earnings/:id — получить заработок офлайн
     if(req.method==='GET'&&parts[0]==='earnings'&&parts[1]){
         if(!DB.pendingEarnings) DB.pendingEarnings={};
         return reply(res,200, DB.pendingEarnings[parts[1]]||{total:0,sales:[]});
     }
-    // POST /earnings/:id/claim — забрать заработок
     if(req.method==='POST'&&parts[0]==='earnings'&&parts[1]==='claim'||
        req.method==='POST'&&parts[0]==='earnings'&&parts[2]==='claim'){
         const pid=parts[1]==='claim'?parts[0]:parts[1];
@@ -429,7 +425,6 @@ const server=http.createServer(async(req,res)=>{
         delete DB.pendingEarnings[pid];
         saveDB(); return reply(res,200,{ok:true,amount,newBalance:DB.players[pid].balance});
     }
-    // POST /nfts/:id/open — открыть подарок (как кейс)
     if(req.method==='POST'&&parts[0]==='nfts'&&parts[2]==='open'){
         const d=await body(req);
         const nft=DB.nfts[parts[1]];
@@ -444,7 +439,6 @@ const server=http.createServer(async(req,res)=>{
         if(player){ player.balance=(player.balance||0)+reward; }
         saveDB(); return reply(res,200,{ok:true,reward,nft});
     }
-    // GET /nfts/player/:id — подарки игрока
     if(req.method==='GET'&&parts[0]==='nfts'&&parts[1]==='player'){
         if(!DB.nfts) DB.nfts={};
         const pid=String(parts[2]);
@@ -453,12 +447,10 @@ const server=http.createServer(async(req,res)=>{
 
     // ══════════ ЛИЧНЫЕ СООБЩЕНИЯ ══════════
 
-    // GET /dm/:chatId — получить сообщения (chatId = sorted userId1_userId2)
     if(req.method==='GET'&&parts[0]==='dm'&&parts[1]){
         if(!DB.dm) DB.dm={};
         return reply(res,200, DB.dm[parts[1]]||[]);
     }
-    // POST /dm/:chatId — отправить сообщение
     if(req.method==='POST'&&parts[0]==='dm'&&parts[1]){
         const d=await body(req);
         if(!d.from) return reply(res,400,{error:'missing from'});
@@ -469,18 +461,15 @@ const server=http.createServer(async(req,res)=>{
             from:String(d.from), fromName:d.fromName||'?', text:d.text.trim(),
             ts:Date.now(), read:false};
         DB.dm[parts[1]].push(msg);
-        // Храним только последние 200 сообщений
         if(DB.dm[parts[1]].length>200) DB.dm[parts[1]]=DB.dm[parts[1]].slice(-200);
         saveDB(); return reply(res,200,{ok:true,msg});
     }
-    // POST /dm/:chatId/read — пометить прочитанными
     if(req.method==='POST'&&parts[0]==='dm'&&parts[2]==='read'){
         const d=await body(req);
         if(!DB.dm||!DB.dm[parts[1]]) return reply(res,200,{ok:true});
         DB.dm[parts[1]].forEach(m=>{ if(String(m.from)!==String(d.userId)) m.read=true; });
         saveDB(); return reply(res,200,{ok:true});
     }
-    // GET /dm/unread/:userId — сколько непрочитанных со всех чатов
     if(req.method==='GET'&&parts[0]==='dm'&&parts[1]==='unread'){
         if(!DB.dm) return reply(res,200,{count:0,chats:{}});
         const uid=String(parts[2]);
@@ -493,7 +482,7 @@ const server=http.createServer(async(req,res)=>{
         return reply(res,200,{count,chats});
     }
 
-    // Leaderboard — топ по балансу (из DB.players, всегда актуально)
+    // Leaderboard
     if(req.method==='GET'&&parts[0]==='leaderboard'){
         const top = Object.values(DB.players)
             .filter(p=>p.name&&(p.balance||0)>=0)
@@ -534,7 +523,6 @@ const server=http.createServer(async(req,res)=>{
         const key=d.name.toLowerCase();
         DB.bans[key]={name:d.name,reason:d.reason||'Нарушение правил',date:new Date().toLocaleDateString('ru'),by:d.by||'Разраб'};
         saveDB();
-        // Кикнуть забаненного через WS (ищем по имени)
         wsClients.forEach(cl=>{
             if(cl.name===key)
                 wsWrite(cl.socket,{type:'banned',reason:d.reason||'Нарушение правил',by:d.by||'Разраб'});
@@ -545,6 +533,11 @@ const server=http.createServer(async(req,res)=>{
         const d=await body(req);
         if(d.adminKey!=='citrus_admin_2025')return reply(res,403,{ok:false,error:'forbidden'});
         delete DB.bans[parts[1].toLowerCase()]; saveDB(); return reply(res,200,{ok:true});
+    }
+    if(req.method==='DELETE'&&parts[0]==='bans'&&!parts[1]){
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025')return reply(res,403,{ok:false,error:'forbidden'});
+        DB.bans={}; saveDB(); return reply(res,200,{ok:true});
     }
     if(req.method==='GET'&&parts[0]==='checkban'&&parts[1]){
         const key=decodeURIComponent(parts[1]).toLowerCase();
@@ -606,12 +599,10 @@ server.on('upgrade',(req,socket)=>{
             if(!msg)continue;
             if(msg.type==='join'){
                 client.userId=msg.id;client.map=msg.map;client.name=(msg.name||'').toLowerCase();
-                // Отправить кэшированные позиции
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
                         wsWrite(socket,p);
                 });
-                // Попросить всех в мире немедленно переслать позицию
                 wsClients.forEach(c2=>{
                     if(c2.map&&String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
                         wsWrite(c2.socket,{type:'req_pos',for:msg.id});
@@ -619,7 +610,6 @@ server.on('upgrade',(req,socket)=>{
             }
             if(msg.type==='move'){client.map=msg.map;positions[msg.id]={...msg,ts:Date.now()};broadcastToMap(msg.map,msg,msg.id);}
             if(msg.type==='leave'){
-                // Игрок явно вышел — сообщаем всем в его карте
                 if(client.map) broadcastToMap(client.map,{type:'leave',id:msg.id},msg.id);
                 delete positions[msg.id];
                 client.map=null;
