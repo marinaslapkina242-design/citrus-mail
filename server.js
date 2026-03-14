@@ -518,6 +518,9 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&parts[0]==='stats'&&parts[1]==='world'){
         const d=await body(req);
         if(!d.world) return reply(res,400,{ok:false});
+        // Записываем только официальные миры
+        const OFFICIAL=['gather','parkour','volcano','space','race','dropper','obby','maze','dungeon'];
+        if(!OFFICIAL.includes(d.world)) return reply(res,200,{ok:true});
         if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
         if(!DB.stats.worldPlays) DB.stats.worldPlays={};
         DB.stats.worldPlays[d.world] = (DB.stats.worldPlays[d.world]||0) + 1;
