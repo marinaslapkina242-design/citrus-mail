@@ -178,8 +178,15 @@ const server=http.createServer(async(req,res)=>{
         const toId=parts[1],letter=await body(req);
         if(!letter.type||!letter.from_id)return reply(res,400,{error:'bad'});
         if(!mailbox[toId])mailbox[toId]=[];
-        if(!mailbox[toId].some(l=>l.type===letter.type&&String(l.from_id)===String(letter.from_id)))
-            mailbox[toId].push({...letter,ts:Date.now()});
+        // Дедупликация ТОЛЬКО для заявок в друзья — подарки и поздравления всегда добавляем
+        const DEDUP_TYPES = ['friend_req','friend_acc'];
+        if(DEDUP_TYPES.includes(letter.type)){
+            if(!mailbox[toId].some(l=>l.type===letter.type&&String(l.from_id)===String(letter.from_id)))
+                mailbox[toId].push({...letter,ts:Date.now()});
+        } else {
+            // Подарки, поздравления и прочее — всегда добавляем
+            mailbox[toId].push({...letter,id:Date.now()+'_'+Math.random().toString(36).slice(2,5),ts:Date.now()});
+        }
         return reply(res,200,{ok:true});
     }
     if(req.method==='GET'&&parts[0]==='mail'&&parts[1]) return reply(res,200,mailbox[parts[1]]||[]);
