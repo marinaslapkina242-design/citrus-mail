@@ -137,7 +137,23 @@ const server=http.createServer(async(req,res)=>{
         const existing = DB.players[parts[1]];
         // Никогда не уменьшаем баланс через этот эндпоинт — только клиентские транзакции
         const safeBalance = Math.max(p.balance||0, existing?.balance||0);
-        DB.players[parts[1]]={...p, balance:safeBalance, id:parts[1],ts:Date.now()};
+        // Объединяем инвентарь (аксессуары): все уникальные элементы из обоих источников
+        const existingInv = existing?.inventory||[];
+        const newInv = p.inventory||[];
+        const mergedInv = Array.from(new Set([...existingInv,...newInv]));
+        // Объединяем друзей: все уникальные по id
+        const existingFriends = existing?.friends||[];
+        const newFriends = p.friends||[];
+        const friendMap = {};
+        [...existingFriends,...newFriends].forEach(f=>{ const id=String(typeof f==='object'?f.id:f); if(id) friendMap[id]=f; });
+        const mergedFriends = Object.values(friendMap);
+        // Объединяем запросы в друзья
+        const existingFR = existing?.friendRequests||[];
+        const newFR = p.friendRequests||[];
+        const frMap = {};
+        [...existingFR,...newFR].forEach(f=>{ const id=String(typeof f==='object'?f.id:f); if(id) frMap[id]=f; });
+        const mergedFR = Object.values(frMap);
+        DB.players[parts[1]]={...p, balance:safeBalance, inventory:mergedInv, friends:mergedFriends, friendRequests:mergedFR, id:parts[1],ts:Date.now()};
         if(isNew){
             if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
             DB.stats.totalRegistered = Object.keys(DB.players).length;
