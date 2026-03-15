@@ -134,7 +134,10 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&parts[0]==='players'&&parts[1]){
         const p=await body(req);
         const isNew = !DB.players[parts[1]];
-        DB.players[parts[1]]={...p,id:parts[1],ts:Date.now()};
+        const existing = DB.players[parts[1]];
+        // Никогда не уменьшаем баланс через этот эндпоинт — только клиентские транзакции
+        const safeBalance = Math.max(p.balance||0, existing?.balance||0);
+        DB.players[parts[1]]={...p, balance:safeBalance, id:parts[1],ts:Date.now()};
         if(isNew){
             if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
             DB.stats.totalRegistered = Object.keys(DB.players).length;
@@ -315,10 +318,9 @@ const server=http.createServer(async(req,res)=>{
         if(!credit||String(credit.lenderId)!==String(d.lenderId))return reply(res,404,{ok:false});
         if(credit.borrowerId)return reply(res,400,{ok:false,error:'Уже взят, нельзя отозвать'});
         const amt=credit.amount;
-        if(!DB.players[d.lenderId]) DB.players[d.lenderId]={id:d.lenderId,balance:0};
-        DB.players[d.lenderId].balance=(DB.players[d.lenderId].balance||0)+amt;
+        // НЕ трогаем серверный баланс — клиент сам прибавит сумму локально
         delete DB.credits.credits[d.creditId]; saveDB();
-        return reply(res,200,{ok:true, amount:amt, balance: DB.players[d.lenderId].balance});
+        return reply(res,200,{ok:true, amount:amt});
     }
 
     // Совместная студия
