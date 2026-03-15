@@ -81,7 +81,7 @@ function saveDB(){
         const payload=JSON.stringify(toSave);
         const kb=(Buffer.byteLength(payload)/1024).toFixed(1);
         console.log(`💾 saving to Gist: ${kb}KB`);
-        const body=JSON.stringify({files:{'citrus_db.json':{content:payload}}});
+        const gistBody=JSON.stringify({files:{'citrus_db.json':{content:payload}}});
         const req=https.request({
             hostname:'api.github.com',
             path:`/gists/${GIST_ID}`,
@@ -91,7 +91,7 @@ function saveDB(){
                 'User-Agent':'citrus-game',
                 'Accept':'application/vnd.github.v3+json',
                 'Content-Type':'application/json',
-                'Content-Length':Buffer.byteLength(body)
+                'Content-Length':Buffer.byteLength(gistBody)
             }
         }, res=>{
             let s=''; res.on('data',c=>s+=c);
@@ -101,7 +101,7 @@ function saveDB(){
             });
         });
         req.on('error',e=>console.error('❌ Gist request error:',e.message));
-        req.write(body); req.end();
+        req.write(gistBody); req.end();
     }, 3000);
 }
 
