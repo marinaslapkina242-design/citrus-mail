@@ -535,10 +535,12 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&parts[0]==='stats'){
         if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
         DB.stats.totalRegistered = Object.keys(DB.players).length;
-        const allAccounts = Object.values(DB.players).map(p=>({
-            id:p.id, name:p.name||'?', tag:p.tag||'', color:p.color||'#888',
-            ts: p.ts||0
-        })).sort((a,b)=>b.ts-a.ts);
+        const allAccounts = Object.values(DB.players)
+            .filter(p=>p.name && !/[.?]/.test(p.name))
+            .map(p=>({
+                id:p.id, name:p.name||'?', tag:p.tag||'', color:p.color||'#888',
+                ts: p.ts||0
+            })).sort((a,b)=>b.ts-a.ts);
         return reply(res,200,{...DB.stats, allAccounts});
     }
     if(req.method==='POST'&&parts[0]==='stats'&&parts[1]==='world'){
