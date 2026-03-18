@@ -732,5 +732,15 @@ server.on('upgrade',(req,socket)=>{
 });
 
 loadDB().then(()=>{
-    server.listen(process.env.PORT||3000,()=>console.log('🍊 Citrus backend OK'));
+    server.listen(process.env.PORT||3000,()=>{
+        console.log('🍊 Citrus backend OK');
+        // Не даём серверу засыпать на Free плане Render
+        const SELF = process.env.RENDER_EXTERNAL_URL||'';
+        if(SELF){
+            setInterval(()=>{
+                https.get(SELF+'/ping',()=>{}).on('error',e=>console.log('ping err:',e.message));
+                console.log('🏓 self-ping');
+            }, 10*60*1000); // каждые 10 минут
+        }
+    });
 });
