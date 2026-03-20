@@ -134,26 +134,63 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&parts[0]==='players'&&parts[1]){
         const p=await body(req);
         const isNew = !DB.players[parts[1]];
-        const existing = DB.players[parts[1]];
-        // Никогда не уменьшаем баланс через этот эндпоинт — только клиентские транзакции
-        const safeBalance = Math.max(p.balance||0, existing?.balance||0);
-        // Объединяем инвентарь (аксессуары): все уникальные элементы из обоих источников
-        const existingInv = existing?.inventory||[];
-        const newInv = p.inventory||[];
-        const mergedInv = Array.from(new Set([...existingInv,...newInv]));
-        // Объединяем друзей: все уникальные по id
-        const existingFriends = existing?.friends||[];
-        const newFriends = p.friends||[];
+        const existing = DB.players[parts[1]] || {};
+
+        // Баланс — берём максимальный (никогда не уменьшаем)
+        const safeBalance = Math.max(p.balance||0, existing.balance||0);
+
+        // Инвентарь — объединяем все уникальные предметы
+        const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
+
+        // Друзья — объединяем по id
         const friendMap = {};
-        [...existingFriends,...newFriends].forEach(f=>{ const id=String(typeof f==='object'?f.id:f); if(id) friendMap[id]=f; });
-        const mergedFriends = Object.values(friendMap);
-        // Объединяем запросы в друзья
-        const existingFR = existing?.friendRequests||[];
-        const newFR = p.friendRequests||[];
+        [...(existing.friends||[]),...(p.friends||[])].forEach(f=>{
+            const id=String(typeof f==='object'?f.id:f); if(id) friendMap[id]=f;
+        });
+
+        // Запросы в друзья
         const frMap = {};
-        [...existingFR,...newFR].forEach(f=>{ const id=String(typeof f==='object'?f.id:f); if(id) frMap[id]=f; });
-        const mergedFR = Object.values(frMap);
-        DB.players[parts[1]]={...p, balance:safeBalance, inventory:mergedInv, friends:mergedFriends, friendRequests:mergedFR, id:parts[1],ts:Date.now()};
+        [...(existing.friendRequests||[]),...(p.friendRequests||[])].forEach(f=>{
+            const id=String(typeof f==='object'?f.id:f); if(id) frMap[id]=f;
+        });
+
+        // Уровень — берём максимальный, XP берём от максимального уровня
+        const safeLevel = Math.max(p.level||1, existing.level||1);
+        const safeXP = (p.level||1) >= (existing.level||1) ? (p.xp||0) : (existing.xp||0);
+
+        // Ежедневная серия — берём максимальный стрик
+        const safeStreak = Math.max(p.dailyStreak||0, existing.dailyStreak||0);
+        // dailyItemClaimed — берём самый свежий (большее число = позже забрали)
+        const safeClaimed = String(Math.max(
+            parseInt(p.dailyItemClaimed||'0'),
+            parseInt(existing.dailyItemClaimed||'0')
+        )) || null;
+
+        // Посещённые миры — объединяем
+        const mergedMaps = Array.from(new Set([...(existing.visitedMaps||[]),...(p.visitedMaps||[])]));
+
+        // Кастомные карты — объединяем
+        const mapMap = {};
+        [...(existing.customMaps||[]),...(p.customMaps||[])].forEach(m=>{ if(m&&m.id) mapMap[m.id]=m; });
+
+        DB.players[parts[1]] = {
+            ...existing,
+            ...p,
+            id: parts[1],
+            ts: Date.now(),
+            // Защищённые поля (берём максимум/слияние):
+            balance: safeBalance,
+            inventory: mergedInv,
+            friends: Object.values(friendMap),
+            friendRequests: Object.values(frMap),
+            level: safeLevel,
+            xp: safeXP,
+            dailyStreak: safeStreak,
+            dailyItemClaimed: safeClaimed,
+            visitedMaps: mergedMaps,
+            customMaps: Object.values(mapMap),
+        };
+
         if(isNew){
             if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
             DB.stats.totalRegistered = Object.keys(DB.players).length;
