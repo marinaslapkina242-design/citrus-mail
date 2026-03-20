@@ -558,7 +558,7 @@ const server=http.createServer(async(req,res)=>{
         return reply(res,200,{count,chats});
     }
 
-    // Leaderboard
+    // Leaderboard (по балансу)
     if(req.method==='GET'&&parts[0]==='leaderboard'){
         const top = Object.values(DB.players)
             .filter(p=>p.name&&(p.balance||0)>=0)
@@ -566,6 +566,27 @@ const server=http.createServer(async(req,res)=>{
             .slice(0,50)
             .map(p=>({id:p.id,name:p.name,tag:p.tag||'',color:p.color||'#FF9800',balance:p.balance||0,inventory:p.inventory||[]}));
         return reply(res,200,top);
+    }
+
+    // Leaderboard (по времени на сайте)
+    if(req.method==='GET'&&parts[0]==='leaderboard-time'){
+        const top = Object.values(DB.players)
+            .filter(p=>p.name&&(p.hubTime||0)>0)
+            .sort((a,b)=>(b.hubTime||0)-(a.hubTime||0))
+            .slice(0,50)
+            .map(p=>({id:p.id,name:p.name,tag:p.tag||'',color:p.color||'#FF9800',hubTime:p.hubTime||0,inventory:p.inventory||[]}));
+        return reply(res,200,top);
+    }
+
+    // Обновить время на сайте
+    if(req.method==='POST'&&parts[0]==='hub-time'&&parts[1]){
+        const d=await body(req);
+        const sec=parseInt(d.seconds)||0;
+        if(sec<=0||sec>3600) return reply(res,400,{error:'bad seconds'});
+        if(!DB.players[parts[1]]) return reply(res,404,{error:'not found'});
+        DB.players[parts[1]].hubTime = (DB.players[parts[1]].hubTime||0) + sec;
+        saveDB();
+        return reply(res,200,{ok:true, hubTime: DB.players[parts[1]].hubTime});
     }
 
     // Stats
