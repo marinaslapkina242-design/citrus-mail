@@ -1,10 +1,10 @@
-const http = require('http');const http = require('http');
+const http = require('http');
 const fs   = require('fs');
 const https = require('https');
 
-// Хранилище: GitHub Gist (проще jsonbin — токен получить в 2 клика)
-const GIST_TOKEN = process.env.GIST_TOKEN || '';
-const GIST_ID    = process.env.GIST_ID    || '';
+const GIST_TOKEN      = process.env.GIST_TOKEN      || '';
+const GIST_ID         = process.env.GIST_ID         || '';
+const ANTHROPIC_KEY   = process.env.ANTHROPIC_KEY   || '';
 
 let DB = {
     players:{}, roulette:{},
@@ -32,6 +32,7 @@ function fixDB(){
     if(!DB.dm) DB.dm={};
     if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
     if(!DB.devmail) DB.devmail={};
+    if(!DB.aiHelper) DB.aiHelper={};
 }
 
 function loadLocalDB(){
@@ -1535,6 +1536,78 @@ const server=http.createServer(async(req,res)=>{
         delete DB.support[parts[1]];
         saveDB();
         return reply(res,200,{ok:true});
+    }
+
+
+    // ═══ AI PROXY — проксируем запрос к Anthropic на сервере ═══
+    if(req.method==='POST'&&parts[0]==='ai-proxy'){
+        const d=await body(req);
+        if(!d.messages) return reply(res,400,{error:'bad'});
+        const key = ANTHROPIC_KEY;
+        if(!key) return reply(res,500,{error:'ANTHROPIC_KEY not set on server'});
+        const payload=JSON.stringify({
+            model:'claude-haiku-4-5-20251001',
+            max_tokens:1000,
+            system: d.system||'Ты — ИИ Хелпер игры Citrus Online 🍊. Отвечай на языке пользователя, кратко и по делу.',
+            messages: d.messages
+        });
+        return new Promise(resolve=>{
+            const apiReq=https.request({
+                hostname:'api.anthropic.com',
+                path:'/v1/messages',
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'x-api-key': key,
+                    'anthropic-version':'2023-06-01',
+                    'Content-Length': Buffer.byteLength(payload)
+                }
+            }, apiRes=>{
+                let s=''; apiRes.on('data',c=>s+=c);
+                apiRes.on('end',()=>{
+                    try{
+                        const data=JSON.parse(s);
+                        res.writeHead(apiRes.statusCode, H);
+                        res.end(JSON.stringify(data));
+                    }catch(e){ reply(res,500,{error:'parse error'}); }
+                    resolve();
+                });
+            });
+            apiReq.on('error',e=>{ reply(res,502,{error:e.message}); resolve(); });
+            apiReq.write(payload);
+            apiReq.end();
+        });
+    }
+
+    // ═══ AI HELPER ═══
+    if(req.method==="POST"&&parts[0]==="ai-helper"&&parts[1]==="buy"){
+        const d=await body(req);
+        if(!d.playerId) return reply(res,400,{error:"bad"});
+        const p=DB.players[String(d.playerId)];
+        if(!p) return reply(res,404,{error:"player not found"});
+        const cost=1000;
+        if((p.balance||0)<cost) return reply(res,400,{ok:false,error:"not enough balance"});
+        p.balance=(p.balance||0)-cost;
+        if(!DB.aiHelper) DB.aiHelper={};
+        const key=String(d.playerId);
+        DB.aiHelper[key]={msgs:(DB.aiHelper[key]?.msgs||0)+5,total:(DB.aiHelper[key]?.total||0)+5};
+        saveDB();
+        return reply(res,200,{ok:true,balance:p.balance,msgsLeft:DB.aiHelper[key].msgs});
+    }
+    if(req.method==="POST"&&parts[0]==="ai-helper"&&parts[1]==="use"){
+        const d=await body(req);
+        if(!d.playerId) return reply(res,400,{error:"bad"});
+        if(!DB.aiHelper) DB.aiHelper={};
+        const key=String(d.playerId);
+        const cur=(DB.aiHelper[key]?.msgs||0);
+        if(cur<=0) return reply(res,400,{ok:false,error:"no messages left"});
+        DB.aiHelper[key].msgs=cur-1;
+        saveDB();
+        return reply(res,200,{ok:true,msgsLeft:DB.aiHelper[key].msgs});
+    }
+    if(req.method==="GET"&&parts[0]==="ai-helper"&&parts[1]){
+        if(!DB.aiHelper) DB.aiHelper={};
+        return reply(res,200,{msgsLeft:DB.aiHelper[String(parts[1])]?.msgs||0});
     }
 
     reply(res,404,{error:'not found'});
