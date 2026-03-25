@@ -141,8 +141,11 @@ const server=http.createServer(async(req,res)=>{
         // Баланс — берём максимальный (никогда не уменьшаем)
         const safeBalance = Math.max(p.balance||0, existing.balance||0);
 
-        // Инвентарь — объединяем все уникальные предметы
-        const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
+        // Инвентарь — берём только то что прислал клиент (снятые вещи не возвращаем)
+        // p._invSaved=true означает что клиент явно сохраняет инвентарь (даже если он пустой)
+        const mergedInv = p._invSaved
+            ? (p.inventory || [])
+            : (p.inventory && p.inventory.length > 0 ? p.inventory : (existing.inventory || []));
 
         // Друзья — объединяем по id
         const friendMap = {};
