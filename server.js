@@ -4,6 +4,7 @@ const https = require('https');
 
 const GIST_TOKEN      = process.env.GIST_TOKEN      || '';
 const GIST_ID         = process.env.GIST_ID         || '';
+const ANTHROPIC_KEY   = process.env.ANTHROPIC_KEY   || '';
 const GROQ_KEY        = process.env.GROQ_KEY        || '';
 
 let DB = {
@@ -733,6 +734,95 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         delete DB.support[parts[1]];
         saveDB();
         return reply(res,200,{ok:true});
+    }
+
+    // ═══ AI PROXY — Groq (бесплатно и быстро) ═══
+    if(req.method==='POST'&&parts[0]==='ai-proxy'){
+        const d=await body(req);
+        if(!d.messages) return reply(res,400,{error:'bad'});
+        const key=GROQ_KEY;
+        if(!key){
+            console.error('❌ GROQ_KEY не задан в Environment Variables!');
+            return reply(res,500,{error:'GROQ_KEY not set on server'});
+        }
+        const messages=d.messages.map(m=>{
+            if(typeof m.content==='string') return m;
+            const text=(Array.isArray(m.content)?m.content:[m.content])
+                .filter(b=>b&&b.type==='text').map(b=>b.text).join('\n');
+            return {role:m.role,content:text||'...'};
+        });
+        const payload=JSON.stringify({
+            model:'llama-3.1-8b-instant',
+            max_tokens:1000,
+            messages:[
+                {role:'system',content:d.system||'Ты — ИИ Хелпер игры Citrus Online 🍊. Отвечай на языке пользователя, кратко и по делу.'},
+                ...messages
+            ]
+        });
+        return new Promise(resolve=>{
+            const apiReq=https.request({
+                hostname:'api.groq.com',
+                path:'/openai/v1/chat/completions',
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+key,'Content-Length':Buffer.byteLength(payload)}
+            },apiRes=>{
+                let s=''; apiRes.on('data',c=>s+=c);
+                apiRes.on('end',()=>{
+                    try{
+                        const data=JSON.parse(s);
+                        console.log('🤖 Groq status:',apiRes.statusCode);
+                        if(data.error){
+                            console.error('❌ Groq error:',JSON.stringify(data.error));
+                            res.writeHead(200,H);
+                            res.end(JSON.stringify({content:[{type:'text',text:'❌ Groq: '+(data.error.message||JSON.stringify(data.error))}]}));
+                        } else {
+                            const text=data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content||'Пустой ответ от Groq.';
+                            res.writeHead(200,H); res.end(JSON.stringify({content:[{type:'text',text}]}));
+                        }
+                    }catch(e){
+                        console.error('❌ Groq parse error:',e.message,'raw:',s.slice(0,200));
+                        reply(res,500,{error:'parse error: '+e.message});
+                    }
+                    resolve();
+                });
+            });
+            apiReq.on('error',e=>{
+                console.error('❌ Groq request error:',e.message);
+                reply(res,502,{error:e.message});
+                resolve();
+            });
+            apiReq.write(payload); apiReq.end();
+        });
+    }
+
+    // ═══ AI HELPER — покупка/трата сообщений ═══
+    if(req.method==='POST'&&parts[0]==='ai-helper'&&parts[1]==='buy'){
+        const d=await body(req);
+        if(!d.playerId) return reply(res,400,{error:'bad'});
+        const p=DB.players[String(d.playerId)];
+        if(!p) return reply(res,404,{error:'player not found'});
+        if((p.balance||0)<1000) return reply(res,400,{ok:false,error:'not enough balance'});
+        p.balance=(p.balance||0)-1000;
+        if(!DB.aiHelper) DB.aiHelper={};
+        const key=String(d.playerId);
+        DB.aiHelper[key]={msgs:(DB.aiHelper[key]&&DB.aiHelper[key].msgs||0)+5};
+        saveDB();
+        return reply(res,200,{ok:true,balance:p.balance,msgsLeft:DB.aiHelper[key].msgs});
+    }
+    if(req.method==='POST'&&parts[0]==='ai-helper'&&parts[1]==='use'){
+        const d=await body(req);
+        if(!d.playerId) return reply(res,400,{error:'bad'});
+        if(!DB.aiHelper) DB.aiHelper={};
+        const key=String(d.playerId);
+        const cur=(DB.aiHelper[key]&&DB.aiHelper[key].msgs)||0;
+        if(cur<=0) return reply(res,400,{ok:false,error:'no messages left'});
+        DB.aiHelper[key].msgs=cur-1;
+        saveDB();
+        return reply(res,200,{ok:true,msgsLeft:DB.aiHelper[key].msgs});
+    }
+    if(req.method==='GET'&&parts[0]==='ai-helper'&&parts[1]){
+        if(!DB.aiHelper) DB.aiHelper={};
+        return reply(res,200,{msgsLeft:(DB.aiHelper[String(parts[1])]&&DB.aiHelper[String(parts[1])].msgs)||0});
     }
 
     reply(res,404,{error:'not found'});
