@@ -191,7 +191,7 @@ const server=http.createServer(async(req,res)=>{
             dailyItemClaimed: safeClaimed,
             visitedMaps: mergedMaps,
             customMaps: Object.values(mapMap),
-            // hubTime никогда не затирается клиентом — только через /hub-time
+            // hubTime только через /hub-time — не затираем
             hubTime: existing.hubTime || 0,
         };
 
