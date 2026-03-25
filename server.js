@@ -141,11 +141,8 @@ const server=http.createServer(async(req,res)=>{
         // Баланс — берём максимальный (никогда не уменьшаем)
         const safeBalance = Math.max(p.balance||0, existing.balance||0);
 
-        // Инвентарь — берём только то что прислал клиент (снятые вещи не возвращаем)
-        // p._invSaved=true означает что клиент явно сохраняет инвентарь (даже если он пустой)
-        const mergedInv = p._invSaved
-            ? (p.inventory || [])
-            : (p.inventory && p.inventory.length > 0 ? p.inventory : (existing.inventory || []));
+        // Инвентарь — объединяем все уникальные предметы
+        const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
 
         // Друзья — объединяем по id
         const friendMap = {};
@@ -742,6 +739,54 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
     if(req.method==='POST'&&parts[0]==='ai-proxy'){
         const d=await body(req);
         if(!d.messages) return reply(res,400,{error:'bad'});
+
+        // Проверяем есть ли изображения в сообщениях
+        const hasImage = d.messages.some(m=>
+            Array.isArray(m.content) && m.content.some(b=>b&&b.type==='image')
+        );
+
+        // Если есть картинка — используем Anthropic Claude (поддерживает vision)
+        const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+        if(hasImage && ANTHROPIC_KEY){
+            const claudeMessages = d.messages.map(m=>{
+                if(typeof m.content==='string') return m;
+                // Оставляем image и text блоки как есть
+                return {role:m.role, content: Array.isArray(m.content)?m.content:[m.content]};
+            });
+            const claudePayload = JSON.stringify({
+                model:'claude-haiku-4-5-20251001',
+                max_tokens:1000,
+                system: d.system||'Ты — ИИ Хелпер игры Citrus Online 🍊. Отвечай на языке пользователя, кратко и по делу.',
+                messages: claudeMessages
+            });
+            return new Promise(resolve=>{
+                const apiReq=https.request({
+                    hostname:'api.anthropic.com',
+                    path:'/v1/messages',
+                    method:'POST',
+                    headers:{
+                        'Content-Type':'application/json',
+                        'x-api-key': ANTHROPIC_KEY,
+                        'anthropic-version':'2023-06-01',
+                        'Content-Length':Buffer.byteLength(claudePayload)
+                    }
+                },apiRes=>{
+                    let s=''; apiRes.on('data',c=>s+=c);
+                    apiRes.on('end',()=>{
+                        try{
+                            const data=JSON.parse(s);
+                            if(data.error){ res.writeHead(200,H); res.end(JSON.stringify({content:[{type:'text',text:'❌ '+( data.error.message||JSON.stringify(data.error))}]})); }
+                            else { const text=data.content&&data.content[0]&&data.content[0].text||'Пустой ответ.'; res.writeHead(200,H); res.end(JSON.stringify({content:[{type:'text',text}]})); }
+                        }catch(e){ reply(res,500,{error:'parse error'}); }
+                        resolve();
+                    });
+                });
+                apiReq.on('error',e=>{ reply(res,502,{error:e.message}); resolve(); });
+                apiReq.write(claudePayload); apiReq.end();
+            });
+        }
+
+        // Текстовые сообщения — используем Groq (быстро и бесплатно)
         const key=GROQ_KEY;
         if(!key){
             console.error('❌ GROQ_KEY не задан в Environment Variables!');
