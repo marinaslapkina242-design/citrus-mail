@@ -4,7 +4,6 @@ const https = require('https');
 
 const GIST_TOKEN      = process.env.GIST_TOKEN      || '';
 const GIST_ID         = process.env.GIST_ID         || '';
-const ANTHROPIC_KEY   = process.env.ANTHROPIC_KEY   || '';
 const GROQ_KEY        = process.env.GROQ_KEY        || '';
 
 let DB = {
