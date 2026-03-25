@@ -440,6 +440,15 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         const now=Date.now();
         return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
     }
+    // HTTP fallback для позиций (когда WS недоступен)
+    if(req.method==='POST'&&parts[0]==='pos'&&parts[1]){
+        const p=await body(req);
+        if(p&&p.map){
+            positions[parts[1]]={...p,id:parts[1],ts:Date.now(),type:'move'};
+            broadcastToMap(p.map,{...p,id:parts[1],type:'move'},parts[1]);
+        }
+        return reply(res,200,{ok:true});
+    }
 
     // ══════════ NFT ПОДАРКИ ══════════
 
@@ -840,6 +849,7 @@ function wsRead(data){
         const masked=(data[1]&0x80)!==0;
         let len=data[1]&0x7f,offset=2;
         if(len===126){len=(data[2]<<8)|data[3];offset=4;}
+        else if(len===127){len=Number(BigInt(data.readBigUInt64BE(2)));offset=10;}
         const mask=masked?data.slice(offset,offset+4):null; offset+=masked?4:0;
         const payload=Buffer.alloc(len);
         for(let i=0;i<len;i++)payload[i]=masked?data[offset+i]^mask[i%4]:data[offset+i];
@@ -850,9 +860,19 @@ function wsWrite(socket,data){
     try{
         const payload=Buffer.from(JSON.stringify(data));
         const len=payload.length;
-        const header=len<126?Buffer.from([0x81,len]):Buffer.from([0x81,126,(len>>8)&0xff,len&0xff]);
+        let header;
+        if(len<126) header=Buffer.from([0x81,len]);
+        else if(len<65536) header=Buffer.from([0x81,126,(len>>8)&0xff,len&0xff]);
+        else {
+            header=Buffer.alloc(10); header[0]=0x81; header[1]=127;
+            const big=BigInt(len);
+            for(let i=0;i<8;i++) header[9-i]=Number((big>>(BigInt(i)*8n))&0xffn);
+        }
         socket.write(Buffer.concat([header,payload]));
     }catch(e){}
+}
+function wsPing(socket){
+    try{ socket.write(Buffer.from([0x89,0x00])); }catch(e){}
 }
 function broadcastToMap(map,msg,exceptId){
     wsClients.forEach(c=>{ if(String(c.map)===String(map)&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
@@ -861,35 +881,61 @@ function broadcastToSession(sessionId,msg,exceptId){
     wsClients.forEach(c=>{ if(c.studioSession===sessionId&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
 }
 
+// Каждые 15 сек: пингуем клиентов и чистим позиции без живого WS
+setInterval(()=>{
+    const activeIds=new Set();
+    wsClients.forEach(c=>{ if(c.userId) activeIds.add(String(c.userId)); });
+    Object.keys(positions).forEach(id=>{
+        if(!activeIds.has(String(id))){
+            const p=positions[id];
+            if(p&&p.map) broadcastToMap(p.map,{type:'leave',id},id);
+            delete positions[id];
+        }
+    });
+    wsClients.forEach(c=>wsPing(c.socket));
+}, 15000);
+
 server.on('upgrade',(req,socket)=>{
     wsHandshake(req,socket);
     const cid=Math.random().toString(36).slice(2);
-    const client={socket,map:null,userId:null,studioSession:null};
+    const client={socket,map:null,userId:null,studioSession:null,lastPong:Date.now()};
     wsClients.set(cid,client);
     let buf=Buffer.alloc(0);
     socket.on('data',chunk=>{
         buf=Buffer.concat([buf,chunk]);
         while(buf.length>=2){
             const opcode=buf[0]&0x0f;
-            if(opcode===0x8){wsClients.delete(cid);return;}
+            if(opcode===0xA){ client.lastPong=Date.now(); buf=buf.slice(2); continue; } // pong
+            if(opcode===0x8){
+                if(client.userId&&client.map){ broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId); delete positions[client.userId]; }
+                wsClients.delete(cid); return;
+            }
             let len=buf[1]&0x7f,frameLen=2+(buf[1]&0x80?4:0)+len;
-            if(len===126)frameLen=4+(buf[1]&0x80?4:0)+((buf[2]<<8)|buf[3]);
+            if(len===126) frameLen=4+(buf[1]&0x80?4:0)+((buf[2]<<8)|buf[3]);
+            else if(len===127) frameLen=10+(buf[1]&0x80?4:0)+Number(BigInt(buf.readBigUInt64BE(2)));
             if(buf.length<frameLen)break;
             const frame=buf.slice(0,frameLen);buf=buf.slice(frameLen);
             const msg=wsRead(frame);
             if(!msg)continue;
+            client.lastPong=Date.now();
             if(msg.type==='join'){
-                client.userId=msg.id;client.map=msg.map;client.name=(msg.name||'').toLowerCase();
+                client.userId=msg.id; client.map=msg.map; client.name=(msg.name||'').toLowerCase();
+                // Шлём новому игроку позиции всех кто уже на карте
                 Object.values(positions).forEach(p=>{
                     if(String(p.id)!==String(msg.id)&&String(p.map)===String(msg.map))
-                        wsWrite(socket,p);
+                        wsWrite(socket,{...p,type:'move'});
                 });
+                // Просим всех на карте прислать позицию новому игроку
                 wsClients.forEach(c2=>{
                     if(c2.map&&String(c2.map)===String(msg.map)&&String(c2.userId)!==String(msg.id))
                         wsWrite(c2.socket,{type:'req_pos',for:msg.id});
                 });
             }
-            if(msg.type==='move'){client.map=msg.map;positions[msg.id]={...msg,ts:Date.now()};broadcastToMap(msg.map,msg,msg.id);}
+            if(msg.type==='move'){
+                client.map=msg.map;
+                positions[msg.id]={...msg,type:'move',ts:Date.now()};
+                broadcastToMap(msg.map,msg,msg.id);
+            }
             if(msg.type==='leave'){
                 if(client.map) broadcastToMap(client.map,{type:'leave',id:msg.id},msg.id);
                 delete positions[msg.id];
@@ -899,20 +945,12 @@ server.on('upgrade',(req,socket)=>{
             if(msg.type==='studio_block'||msg.type==='studio_clear'){broadcastToSession(msg.sessionId,msg,msg.userId);}
         }
     });
-    socket.on('close',()=>{
-        if(client.userId && client.map){
-            broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId);
-            delete positions[client.userId];
-        }
+    const cleanup=()=>{
+        if(client.userId&&client.map){ broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId); delete positions[client.userId]; }
         wsClients.delete(cid);
-    });
-    socket.on('error',()=>{
-        if(client.userId && client.map){
-            broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId);
-            delete positions[client.userId];
-        }
-        wsClients.delete(cid);
-    });
+    };
+    socket.on('close',cleanup);
+    socket.on('error',cleanup);
 });
 
 loadDB().then(()=>{
@@ -924,7 +962,7 @@ loadDB().then(()=>{
             setInterval(()=>{
                 https.get(SELF+'/ping',()=>{}).on('error',e=>console.log('ping err:',e.message));
                 console.log('🏓 self-ping');
-            }, 10*60*1000); // каждые 10 минут
+            }, 4*60*1000); // каждые 4 минуты
         }
     });
 });
