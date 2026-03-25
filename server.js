@@ -191,6 +191,8 @@ const server=http.createServer(async(req,res)=>{
             dailyItemClaimed: safeClaimed,
             visitedMaps: mergedMaps,
             customMaps: Object.values(mapMap),
+            // hubTime никогда не затирается клиентом — только через /hub-time
+            hubTime: existing.hubTime || 0,
         };
 
         if(isNew){
@@ -617,7 +619,7 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
     if(req.method==='POST'&&parts[0]==='hub-time'&&parts[1]){
         const d=await body(req);
         const sec=parseInt(d.seconds)||0;
-        if(sec<=0||sec>3600) return reply(res,400,{error:'bad seconds'});
+        if(sec<=0||sec>7200) return reply(res,400,{error:'bad seconds'});
         if(!DB.players[parts[1]]) return reply(res,404,{error:'not found'});
         DB.players[parts[1]].hubTime = (DB.players[parts[1]].hubTime||0) + sec;
         saveDB();
@@ -739,54 +741,6 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
     if(req.method==='POST'&&parts[0]==='ai-proxy'){
         const d=await body(req);
         if(!d.messages) return reply(res,400,{error:'bad'});
-
-        // Проверяем есть ли изображения в сообщениях
-        const hasImage = d.messages.some(m=>
-            Array.isArray(m.content) && m.content.some(b=>b&&b.type==='image')
-        );
-
-        // Если есть картинка — используем Anthropic Claude (поддерживает vision)
-        const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
-        if(hasImage && ANTHROPIC_KEY){
-            const claudeMessages = d.messages.map(m=>{
-                if(typeof m.content==='string') return m;
-                // Оставляем image и text блоки как есть
-                return {role:m.role, content: Array.isArray(m.content)?m.content:[m.content]};
-            });
-            const claudePayload = JSON.stringify({
-                model:'claude-haiku-4-5-20251001',
-                max_tokens:1000,
-                system: d.system||'Ты — ИИ Хелпер игры Citrus Online 🍊. Отвечай на языке пользователя, кратко и по делу.',
-                messages: claudeMessages
-            });
-            return new Promise(resolve=>{
-                const apiReq=https.request({
-                    hostname:'api.anthropic.com',
-                    path:'/v1/messages',
-                    method:'POST',
-                    headers:{
-                        'Content-Type':'application/json',
-                        'x-api-key': ANTHROPIC_KEY,
-                        'anthropic-version':'2023-06-01',
-                        'Content-Length':Buffer.byteLength(claudePayload)
-                    }
-                },apiRes=>{
-                    let s=''; apiRes.on('data',c=>s+=c);
-                    apiRes.on('end',()=>{
-                        try{
-                            const data=JSON.parse(s);
-                            if(data.error){ res.writeHead(200,H); res.end(JSON.stringify({content:[{type:'text',text:'❌ '+( data.error.message||JSON.stringify(data.error))}]})); }
-                            else { const text=data.content&&data.content[0]&&data.content[0].text||'Пустой ответ.'; res.writeHead(200,H); res.end(JSON.stringify({content:[{type:'text',text}]})); }
-                        }catch(e){ reply(res,500,{error:'parse error'}); }
-                        resolve();
-                    });
-                });
-                apiReq.on('error',e=>{ reply(res,502,{error:e.message}); resolve(); });
-                apiReq.write(claudePayload); apiReq.end();
-            });
-        }
-
-        // Текстовые сообщения — используем Groq (быстро и бесплатно)
         const key=GROQ_KEY;
         if(!key){
             console.error('❌ GROQ_KEY не задан в Environment Variables!');
