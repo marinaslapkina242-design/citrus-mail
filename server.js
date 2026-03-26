@@ -871,11 +871,26 @@ function wsWrite(socket,data){
         socket.write(Buffer.concat([header,payload]));
     }catch(e){}
 }
+function wsWriteRaw(socket,payload){
+    try{
+        const len=payload.length;
+        let header;
+        if(len<126) header=Buffer.from([0x81,len]);
+        else if(len<65536) header=Buffer.from([0x81,126,(len>>8)&0xff,len&0xff]);
+        else {
+            header=Buffer.alloc(10); header[0]=0x81; header[1]=127;
+            const big=BigInt(len);
+            for(let i=0;i<8;i++) header[9-i]=Number((big>>(BigInt(i)*8n))&0xffn);
+        }
+        socket.write(Buffer.concat([header,payload]));
+    }catch(e){}
+}
 function wsPing(socket){
     try{ socket.write(Buffer.from([0x89,0x00])); }catch(e){}
 }
 function broadcastToMap(map,msg,exceptId){
-    wsClients.forEach(c=>{ if(String(c.map)===String(map)&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
+    const encoded=Buffer.from(JSON.stringify(msg));
+    wsClients.forEach(c=>{ if(String(c.map)===String(map)&&String(c.userId)!==String(exceptId)) setImmediate(()=>wsWriteRaw(c.socket,encoded)); });
 }
 function broadcastToSession(sessionId,msg,exceptId){
     wsClients.forEach(c=>{ if(c.studioSession===sessionId&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
@@ -910,9 +925,10 @@ server.on('upgrade',(req,socket)=>{
                 if(client.userId&&client.map){ broadcastToMap(client.map,{type:'leave',id:client.userId},client.userId); delete positions[client.userId]; }
                 wsClients.delete(cid); return;
             }
-            let len=buf[1]&0x7f,frameLen=2+(buf[1]&0x80?4:0)+len;
-            if(len===126) frameLen=4+(buf[1]&0x80?4:0)+((buf[2]<<8)|buf[3]);
-            else if(len===127) frameLen=10+(buf[1]&0x80?4:0)+Number(BigInt(buf.readBigUInt64BE(2)));
+            let len=buf[1]&0x7f, hasMask=(buf[1]&0x80)!==0, hdrLen=2;
+            if(len===126){if(buf.length<4)break; len=(buf[2]<<8)|buf[3]; hdrLen=4;}
+            else if(len===127){if(buf.length<10)break; len=Number(BigInt(buf.readBigUInt64BE(2))); hdrLen=10;}
+            const frameLen=hdrLen+(hasMask?4:0)+len;
             if(buf.length<frameLen)break;
             const frame=buf.slice(0,frameLen);buf=buf.slice(frameLen);
             const msg=wsRead(frame);
@@ -943,6 +959,10 @@ server.on('upgrade',(req,socket)=>{
             }
             if(msg.type==='studio_join'){client.studioSession=msg.sessionId;client.userId=msg.userId;}
             if(msg.type==='studio_block'||msg.type==='studio_clear'){broadcastToSession(msg.sessionId,msg,msg.userId);}
+            if(msg.type==='igchat'&&msg.map&&msg.text){
+                // Рассылаем сообщение чата всем на той же карте кроме отправителя
+                broadcastToMap(msg.map,msg,msg.id);
+            }
         }
     });
     const cleanup=()=>{
