@@ -890,7 +890,7 @@ function wsPing(socket){
 }
 function broadcastToMap(map,msg,exceptId){
     const encoded=Buffer.from(JSON.stringify(msg));
-    wsClients.forEach(c=>{ if(String(c.map)===String(map)&&String(c.userId)!==String(exceptId)) setImmediate(()=>wsWriteRaw(c.socket,encoded)); });
+    wsClients.forEach(c=>{ if(String(c.map)===String(map)&&String(c.userId)!==String(exceptId)) wsWriteRaw(c.socket,encoded); });
 }
 function broadcastToSession(sessionId,msg,exceptId){
     wsClients.forEach(c=>{ if(c.studioSession===sessionId&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
