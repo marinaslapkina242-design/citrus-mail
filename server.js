@@ -835,6 +835,15 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         return reply(res,200,{msgsLeft:(DB.aiHelper[String(parts[1])]&&DB.aiHelper[String(parts[1])].msgs)||0});
     }
 
+    // HTTP fallback для igchat (когда WS временно недоступен)
+    if(req.method==='POST'&&parts[0]==='igchat'){
+        const d=await body(req);
+        if(d&&d.map&&d.text){
+            broadcastToMap(d.map,{type:'igchat',...d},d.id||'');
+        }
+        return reply(res,200,{ok:true});
+    }
+
     reply(res,404,{error:'not found'});
 });
 
@@ -896,7 +905,7 @@ function broadcastToSession(sessionId,msg,exceptId){
     wsClients.forEach(c=>{ if(c.studioSession===sessionId&&String(c.userId)!==String(exceptId))wsWrite(c.socket,msg); });
 }
 
-// Каждые 15 сек: пингуем клиентов и чистим позиции без живого WS
+// Каждые 10 сек: пингуем клиентов и чистим позиции без живого WS
 setInterval(()=>{
     const activeIds=new Set();
     wsClients.forEach(c=>{ if(c.userId) activeIds.add(String(c.userId)); });
@@ -908,7 +917,7 @@ setInterval(()=>{
         }
     });
     wsClients.forEach(c=>wsPing(c.socket));
-}, 15000);
+}, 10000);
 
 server.on('upgrade',(req,socket)=>{
     wsHandshake(req,socket);
