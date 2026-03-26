@@ -913,6 +913,7 @@ setInterval(()=>{
 server.on('upgrade',(req,socket)=>{
     wsHandshake(req,socket);
     const cid=Math.random().toString(36).slice(2);
+    socket.setNoDelay(true); // Отключаем алгоритм Нейгла — пакеты идут сразу без буферизации
     const client={socket,map:null,userId:null,studioSession:null,lastPong:Date.now()};
     wsClients.set(cid,client);
     let buf=Buffer.alloc(0);
@@ -949,6 +950,7 @@ server.on('upgrade',(req,socket)=>{
             }
             if(msg.type==='move'){
                 client.map=msg.map;
+                client.userId=client.userId||msg.id;
                 positions[msg.id]={...msg,type:'move',ts:Date.now()};
                 broadcastToMap(msg.map,msg,msg.id);
             }
@@ -960,7 +962,9 @@ server.on('upgrade',(req,socket)=>{
             if(msg.type==='studio_join'){client.studioSession=msg.sessionId;client.userId=msg.userId;}
             if(msg.type==='studio_block'||msg.type==='studio_clear'){broadcastToSession(msg.sessionId,msg,msg.userId);}
             if(msg.type==='igchat'&&msg.map&&msg.text){
-                // Рассылаем сообщение чата всем на той же карте кроме отправителя
+                // Обновляем map клиента на случай если он ещё не слал move
+                if(msg.id) client.userId=client.userId||msg.id;
+                if(msg.map) client.map=client.map||msg.map;
                 broadcastToMap(msg.map,msg,msg.id);
             }
         }
