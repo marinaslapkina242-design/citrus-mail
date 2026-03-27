@@ -844,20 +844,6 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         return reply(res,200,{ok:true});
     }
 
-    // HTTP /scare — отправить эффект испуга конкретному игроку по userId
-    if(req.method==='POST'&&parts[0]==='scare'){
-        const d=await body(req);
-        if(!d||!d.to||!d.effect) return reply(res,400,{error:'missing to/effect'});
-        let sent=0;
-        wsClients.forEach(c=>{
-            if(String(c.userId)===String(d.to)){
-                wsWrite(c.socket,{type:'scare',to:String(d.to),effect:d.effect,from:d.from||''});
-                sent++;
-            }
-        });
-        return reply(res,200,{ok:true,sent});
-    }
-
     reply(res,404,{error:'not found'});
 });
 
@@ -958,10 +944,6 @@ server.on('upgrade',(req,socket)=>{
             const msg=wsRead(frame);
             if(!msg)continue;
             client.lastPong=Date.now();
-            // Регистрация в лобби (без входа в игру — просто чтобы получать scare и другие события)
-            if(msg.type==='lobby'){
-                client.userId=msg.id; client.name=(msg.name||'').toLowerCase();
-            }
             if(msg.type==='join'){
                 client.userId=msg.id; client.map=msg.map; client.name=(msg.name||'').toLowerCase();
                 // Шлём новому игроку позиции всех кто уже на карте
@@ -993,12 +975,6 @@ server.on('upgrade',(req,socket)=>{
                 if(msg.id) client.userId=client.userId||msg.id;
                 if(msg.map) client.map=client.map||msg.map;
                 broadcastToMap(msg.map,msg,msg.id);
-            }
-            if(msg.type==='scare'&&msg.to){
-                // Пересылаем конкретному игроку
-                wsClients.forEach(c=>{
-                    if(String(c.userId)===String(msg.to)) wsWrite(c.socket,msg);
-                });
             }
         }
     });
