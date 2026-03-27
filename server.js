@@ -138,8 +138,9 @@ const server=http.createServer(async(req,res)=>{
         const isNew = !DB.players[parts[1]];
         const existing = DB.players[parts[1]] || {};
 
-        // Баланс — берём максимальный (никогда не уменьшаем)
-        const safeBalance = Math.max(p.balance||0, existing.balance||0);
+        // Баланс — берём от клиента если он явно передал число, иначе берём из БД
+        // (Math.max убран — он восстанавливал старый баланс после трат)
+        const safeBalance = (typeof p.balance === 'number') ? p.balance : (existing.balance || 0);
 
         // Инвентарь — объединяем все уникальные предметы
         const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
