@@ -139,11 +139,11 @@ const server=http.createServer(async(req,res)=>{
         const existing = DB.players[parts[1]] || {};
 
         // Баланс — берём от клиента если он явно передал число, иначе берём из БД
-        // (Math.max убран — он восстанавливал старый баланс после трат)
         const safeBalance = (typeof p.balance === 'number') ? p.balance : (existing.balance || 0);
 
-        // Инвентарь — объединяем все уникальные предметы
-        const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
+        // Инвентарь — доверяем клиенту если он прислал массив (даже пустой после снятия вещей)
+        // Мёрдж убран — он возвращал снятые предметы обратно
+        const safeInv = Array.isArray(p.inventory) ? p.inventory : (existing.inventory || []);
 
         // Друзья — объединяем по id
         const friendMap = {};
@@ -183,7 +183,7 @@ const server=http.createServer(async(req,res)=>{
             ts: Date.now(),
             // Защищённые поля (берём максимум/слияние):
             balance: safeBalance,
-            inventory: mergedInv,
+            inventory: safeInv,
             friends: Object.values(friendMap),
             friendRequests: Object.values(frMap),
             level: safeLevel,
