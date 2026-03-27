@@ -976,6 +976,12 @@ server.on('upgrade',(req,socket)=>{
                 if(msg.map) client.map=client.map||msg.map;
                 broadcastToMap(msg.map,msg,msg.id);
             }
+            if(msg.type==='scare'&&msg.to){
+                // Пересылаем конкретному игроку
+                wsClients.forEach(c=>{
+                    if(String(c.userId)===String(msg.to)) wsWrite(c.socket,msg);
+                });
+            }
         }
     });
     const cleanup=()=>{
