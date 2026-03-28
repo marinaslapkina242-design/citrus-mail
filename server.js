@@ -138,12 +138,11 @@ const server=http.createServer(async(req,res)=>{
         const isNew = !DB.players[parts[1]];
         const existing = DB.players[parts[1]] || {};
 
-        // Баланс — берём от клиента если он явно передал число, иначе берём из БД
-        const safeBalance = (typeof p.balance === 'number') ? p.balance : (existing.balance || 0);
+        // Баланс — берём максимальный (никогда не уменьшаем)
+        const safeBalance = Math.max(p.balance||0, existing.balance||0);
 
-        // Инвентарь — доверяем клиенту если он прислал массив (даже пустой после снятия вещей)
-        // Мёрдж убран — он возвращал снятые предметы обратно
-        const safeInv = Array.isArray(p.inventory) ? p.inventory : (existing.inventory || []);
+        // Инвентарь — объединяем все уникальные предметы
+        const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
 
         // Друзья — объединяем по id
         const friendMap = {};
@@ -183,7 +182,7 @@ const server=http.createServer(async(req,res)=>{
             ts: Date.now(),
             // Защищённые поля (берём максимум/слияние):
             balance: safeBalance,
-            inventory: safeInv,
+            inventory: mergedInv,
             friends: Object.values(friendMap),
             friendRequests: Object.values(frMap),
             level: safeLevel,
@@ -439,7 +438,7 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
     if(req.method==='GET'&&parts[0]==='pos'){
         const map=url.searchParams.get('map');
         const now=Date.now();
-        return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<30000));
+        return reply(res,200,Object.values(positions).filter(p=>String(p.map)===String(map)&&now-(p.ts||0)<300000));
     }
     // HTTP fallback для позиций (когда WS недоступен)
     if(req.method==='POST'&&parts[0]==='pos'&&parts[1]){
