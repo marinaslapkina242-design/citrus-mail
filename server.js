@@ -28,11 +28,14 @@ function fixDB(){
     if(!DB.bans) DB.bans={};
     if(!DB.nfts) DB.nfts={};
     if(!DB.pendingEarnings) DB.pendingEarnings={};
+    if(!DB.coding) DB.coding={};
+    if(!DB.movies) DB.movies={};
     if(!DB.support) DB.support={};
     if(!DB.dm) DB.dm={};
     if(!DB.stats) DB.stats={totalRegistered:0,totalSessions:0,worldPlays:{},dailyActive:{},firstSeenDates:[]};
     if(!DB.devmail) DB.devmail={};
     if(!DB.aiHelper) DB.aiHelper={};
+    if(!DB.promoCodes) DB.promoCodes={};
 }
 
 function loadLocalDB(){
@@ -138,8 +141,8 @@ const server=http.createServer(async(req,res)=>{
         const isNew = !DB.players[parts[1]];
         const existing = DB.players[parts[1]] || {};
 
-        // Баланс — берём максимальный (никогда не уменьшаем)
-        const safeBalance = Math.max(p.balance||0, existing.balance||0);
+        // Баланс — берём максимальный, но если клиент явно указал forceBalance — доверяем ему (списание подарков и т.д.)
+        const safeBalance = p.forceBalance ? (p.balance||0) : Math.max(p.balance||0, existing.balance||0);
 
         // Инвентарь — объединяем все уникальные предметы
         const mergedInv = Array.from(new Set([...(existing.inventory||[]),...(p.inventory||[])]));
@@ -499,6 +502,7 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         if(nft.sellerIsPlayer && prevOwnerId && String(prevOwnerId)!==String(d.buyerId)){
             if(!DB.players[prevOwnerId]) DB.players[prevOwnerId]={id:String(prevOwnerId),balance:0};
             if(!DB.pendingEarnings) DB.pendingEarnings={};
+    if(!DB.coding) DB.coding={};
             if(!DB.pendingEarnings[prevOwnerId]) DB.pendingEarnings[prevOwnerId]={total:0,sales:[]};
             DB.pendingEarnings[prevOwnerId].total=(DB.pendingEarnings[prevOwnerId].total||0)+nft.price;
             DB.pendingEarnings[prevOwnerId].sales.push({
@@ -535,7 +539,53 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
     }
     if(req.method==='GET'&&parts[0]==='earnings'&&parts[1]){
         if(!DB.pendingEarnings) DB.pendingEarnings={};
+    if(!DB.coding) DB.coding={};
         return reply(res,200, DB.pendingEarnings[parts[1]]||{total:0,sales:[]});
+    }
+    // ══════ CODING ══════
+    if(req.method==='GET'&&parts[0]==='coding'&&!parts[1]){
+        const author = url.searchParams.get('author');
+        let projects = Object.values(DB.coding||{}).sort((a,b)=>b.ts-a.ts);
+        if(author) projects = projects.filter(p=>String(p.authorId)===String(author));
+        // Считаем просмотры не здесь, а при GET /coding/:id
+        return reply(res,200,projects.slice(0,50));
+    }
+    if(req.method==='GET'&&parts[0]==='coding'&&parts[1]){
+        const p = (DB.coding||{})[parts[1]];
+        if(!p) return reply(res,404,{error:'not found'});
+        p.views = (p.views||0)+1;
+        saveDB();
+        return reply(res,200,p);
+    }
+    if(req.method==='POST'&&parts[0]==='coding'&&!parts[1]){
+        const d=await body(req);
+        if(!d.title||!d.code||!d.authorId) return reply(res,400,{error:'bad'});
+        if(!DB.coding) DB.coding={};
+        const id='code_'+Date.now()+'_'+String(d.authorId);
+        DB.coding[id]={id,title:d.title,desc:d.desc||'',code:d.code,authorId:String(d.authorId),authorName:d.authorName||'?',authorColor:d.authorColor||'#888',likes:0,likedBy:[],views:0,ts:Date.now()};
+        saveDB();
+        return reply(res,200,{ok:true,id});
+    }
+    if(req.method==='POST'&&parts[0]==='coding'&&parts[2]==='like'){
+        const d=await body(req);
+        const p=(DB.coding||{})[parts[1]];
+        if(!p) return reply(res,404,{error:'not found'});
+        if(!p.likedBy) p.likedBy=[];
+        const uid=String(d.userId);
+        const alreadyLiked=p.likedBy.includes(uid);
+        if(alreadyLiked){ p.likedBy=p.likedBy.filter(x=>x!==uid); p.likes=Math.max(0,(p.likes||1)-1); }
+        else { p.likedBy.push(uid); p.likes=(p.likes||0)+1; }
+        saveDB();
+        return reply(res,200,{ok:true,likes:p.likes,liked:!alreadyLiked});
+    }
+    if(req.method==='DELETE'&&parts[0]==='coding'&&parts[1]){
+        const d=await body(req);
+        const p=(DB.coding||{})[parts[1]];
+        if(!p) return reply(res,404,{error:'not found'});
+        if(String(p.authorId)!==String(d.userId)) return reply(res,403,{error:'forbidden'});
+        delete DB.coding[parts[1]];
+        saveDB();
+        return reply(res,200,{ok:true});
     }
     if(req.method==='POST'&&parts[0]==='earnings'&&parts[1]==='claim'||
        req.method==='POST'&&parts[0]==='earnings'&&parts[2]==='claim'){
@@ -614,10 +664,20 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         return reply(res,200,top);
     }
 
+    // Leaderboard (по токенам)
+    if(req.method==='GET'&&parts[0]==='leaderboard-tokens'){
+        const top = Object.values(DB.players)
+            .filter(p=>p.name)
+            .sort((a,b)=>(b.tokens||0)-(a.tokens||0))
+            .slice(0,50)
+            .map(p=>({id:p.id,name:p.name,tag:p.tag||'',color:p.color||'#FF9800',tokens:p.tokens||0,inventory:p.inventory||[]}));
+        return reply(res,200,top);
+    }
+
     // Leaderboard (по времени на сайте)
     if(req.method==='GET'&&parts[0]==='leaderboard-time'){
         const top = Object.values(DB.players)
-            .filter(p=>p.name&&(p.hubTime||0)>0)
+            .filter(p=>p.name)
             .sort((a,b)=>(b.hubTime||0)-(a.hubTime||0))
             .slice(0,50)
             .map(p=>({id:p.id,name:p.name,tag:p.tag||'',color:p.color||'#FF9800',hubTime:p.hubTime||0,inventory:p.inventory||[]}));
@@ -844,6 +904,112 @@ if(req.method==='DELETE'&&parts[0]==='devmail'&&parts[1]){
         return reply(res,200,{ok:true});
     }
 
+    // ══════════ ПРОМОКОДЫ ══════════
+    if(req.method==='GET'&&parts[0]==='promo'&&!parts[1]){
+        // Разраб видит все промокоды
+        const key=url.searchParams.get('adminKey');
+        if(key!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        if(!DB.promoCodes) DB.promoCodes={};
+        return reply(res,200,DB.promoCodes);
+    }
+    if(req.method==='POST'&&parts[0]==='promo'&&parts[1]==='create'){
+        // Создать промокод (только разраб)
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        if(!d.code||!d.coins) return reply(res,400,{error:'нужен code и coins'});
+        if(!DB.promoCodes) DB.promoCodes={};
+        DB.promoCodes[d.code.toUpperCase()]={
+            code:d.code.toUpperCase(),
+            coins:parseInt(d.coins)||0,
+            desc:d.desc||'',
+            maxUses:parseInt(d.maxUses)||0, // 0 = безлимит
+            uses:0,
+            usedBy:[],
+            createdAt:Date.now()
+        };
+        saveDB();
+        return reply(res,200,{ok:true});
+    }
+    if(req.method==='DELETE'&&parts[0]==='promo'&&parts[1]){
+        // Удалить промокод (только разраб)
+        const d=await body(req);
+        if(d.adminKey!=='citrus_admin_2025') return reply(res,403,{error:'forbidden'});
+        if(!DB.promoCodes||!DB.promoCodes[parts[1].toUpperCase()]) return reply(res,404,{error:'не найден'});
+        delete DB.promoCodes[parts[1].toUpperCase()];
+        saveDB();
+        return reply(res,200,{ok:true});
+    }
+    if(req.method==='POST'&&parts[0]==='promo'&&parts[1]==='redeem'){
+        const d=await body(req);
+        const code=(d.code||'').toUpperCase().trim();
+        const userId=String(d.userId||'');
+        if(!code||!userId) return reply(res,400,{error:'Нет кода или userId'});
+        if(!DB.promoCodes) DB.promoCodes={};
+        const promo=DB.promoCodes[code];
+        if(!promo) return reply(res,200,{ok:false,error:'Промокод не найден или уже недействителен'});
+        // Проверяем не использовал ли уже
+        if(promo.usedBy.includes(userId)) return reply(res,200,{ok:false,error:'Ты уже использовал этот промокод'});
+        // Проверяем лимит использований
+        if(promo.maxUses>0&&promo.uses>=promo.maxUses) return reply(res,200,{ok:false,error:'Промокод закончился'});
+        // Применяем
+        promo.uses++;
+        promo.usedBy.push(userId);
+        // Начисляем монеты игроку
+        if(promo.coins>0&&DB.players[userId]){
+            DB.players[userId].balance=(DB.players[userId].balance||0)+promo.coins;
+        }
+        saveDB();
+        return reply(res,200,{ok:true,coins:promo.coins,desc:promo.desc});
+    }
+
+    // ── MOVIES ──
+    if(req.method==='GET'&&parts[0]==='movies'&&!parts[1]){
+        if(!DB.movies) DB.movies={};
+        let movies = Object.values(DB.movies).sort((a,b)=>b.ts-a.ts);
+        const genre = url.searchParams.get('genre');
+        if(genre) movies = movies.filter(m=>m.genre===genre);
+        return reply(res,200,movies);
+    }
+    if(req.method==='GET'&&parts[0]==='movies'&&parts[1]&&!parts[2]){
+        const m=(DB.movies||{})[parts[1]];
+        if(!m) return reply(res,404,{error:'not found'});
+        return reply(res,200,m);
+    }
+    if(req.method==='POST'&&parts[0]==='movies'&&!parts[1]){
+        const d=await body(req);
+        if(!d.url||!d.title||!d.authorId) return reply(res,400,{error:'bad'});
+        if(!DB.movies) DB.movies={};
+        const id='mov_'+Date.now();
+        DB.movies[id]={id,url:d.url,title:d.title,desc:d.desc||'',genre:d.genre||'other',authorId:String(d.authorId),likes:0,likedBy:[],views:0,ts:Date.now()};
+        saveDB();
+        return reply(res,200,{ok:true,id});
+    }
+    if(req.method==='POST'&&parts[0]==='movies'&&parts[2]==='like'){
+        const d=await body(req);
+        const m=(DB.movies||{})[parts[1]];
+        if(!m) return reply(res,404,{error:'not found'});
+        const uid=String(d.userId||'');
+        if(!m.likedBy) m.likedBy=[];
+        const idx=m.likedBy.indexOf(uid);
+        if(idx===-1){ m.likedBy.push(uid); m.likes=(m.likes||0)+1; }
+        else { m.likedBy.splice(idx,1); m.likes=Math.max(0,(m.likes||1)-1); }
+        saveDB();
+        return reply(res,200,{liked:idx===-1,likes:m.likes});
+    }
+    if(req.method==='POST'&&parts[0]==='movies'&&parts[2]==='view'){
+        const m=(DB.movies||{})[parts[1]];
+        if(!m) return reply(res,404,{error:'not found'});
+        m.views=(m.views||0)+1; saveDB();
+        return reply(res,200,{ok:true});
+    }
+    if(req.method==='DELETE'&&parts[0]==='movies'&&parts[1]){
+        const d=await body(req);
+        const m=(DB.movies||{})[parts[1]];
+        if(!m) return reply(res,404,{error:'not found'});
+        delete DB.movies[parts[1]]; saveDB();
+        return reply(res,200,{ok:true});
+    }
+
     reply(res,404,{error:'not found'});
 });
 
@@ -975,6 +1141,16 @@ server.on('upgrade',(req,socket)=>{
                 if(msg.id) client.userId=client.userId||msg.id;
                 if(msg.map) client.map=client.map||msg.map;
                 broadcastToMap(msg.map,msg,msg.id);
+            }
+            if(msg.type==='emote'&&msg.map&&msg.emote){
+                // Рассылаем эмоцию всем на той же карте кроме отправителя
+                broadcastToMap(msg.map,msg,msg.id);
+            }
+            if(msg.type==='scare'&&msg.to){
+                // Пересылаем пугалку конкретному игроку
+                wsClients.forEach(c=>{
+                    if(String(c.userId)===String(msg.to)) wsWrite(c.socket,msg);
+                });
             }
         }
     });
