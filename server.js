@@ -120,6 +120,8 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL('http://x'+req.url);
     const parts=url.pathname.split('/').filter(Boolean);
 
+    if(req.method==='GET'&&parts.length===0){ res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Access-Control-Allow-Origin':'*'}); return res.end(fs.readFileSync('./index.html')); }
+
     if(req.method==='GET'&&parts[0]==='ping') return reply(res,200,{ok:true, players:Object.keys(DB.players).length, storage: (GIST_TOKEN&&GIST_ID)?'gist':'local' });
 
     // Бэкап БД (только с adminKey)
